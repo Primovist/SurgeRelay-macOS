@@ -107,7 +107,9 @@ actor GitHubClient {
         try await validateDestination(settings: settings, token: token)
 
         let managedPaths = files.map(\.name).sorted()
-        let manifestData = try JSONEncoder().encode(PublishManifest(version: 1, paths: managedPaths))
+        let manifestEncoder = JSONEncoder()
+        manifestEncoder.outputFormatting = [.sortedKeys]
+        let manifestData = try manifestEncoder.encode(PublishManifest(version: 1, paths: managedPaths))
         let publishFiles = files + [PublishFile(name: manifestFileName, data: manifestData)]
 
         var moduleSettings = settings

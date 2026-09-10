@@ -735,7 +735,8 @@ private final class GitHubPublishURLProtocol: URLProtocol, @unchecked Sendable {
             body = Data(#"{"sha":"head","tree":{"sha":"tree"}}"#.utf8)
             status = 200
         } else if path == "/repos/owner/relay/git/trees/tree" {
-            body = Data("{\"tree\":[{\"path\":\"modules/Surge-Relay.sgmodule\",\"type\":\"blob\",\"sha\":\"\(Self.expectedBlobSHA)\"}]}".utf8)
+            let manifest = Data(#"{"paths":["Surge-Relay.sgmodule"],"version":1}"#.utf8)
+            body = Data("{\"tree\":[{\"path\":\"modules/Surge-Relay.sgmodule\",\"type\":\"blob\",\"sha\":\"\(Self.expectedBlobSHA)\"},{\"path\":\"modules/.surge-relay-manifest.json\",\"type\":\"blob\",\"sha\":\"\(manifest.gitBlobSHA1)\"}]}".utf8)
             status = 200
         } else {
             body = Data(#"{"message":"unexpected request"}"#.utf8)
@@ -783,7 +784,7 @@ private final class GitHubResourcePublishURLProtocol: URLProtocol, @unchecked Se
             body = Data(#"{"sha":"blob"}"#.utf8)
             status = 201
         case ("POST", "/repos/owner/relay/git/trees"):
-            Self.treeRequestBody = request.httpBody
+            Self.treeRequestBody = Self.bodyData(from: request)
             body = Data(#"{"sha":"new-tree"}"#.utf8)
             status = 201
         case ("POST", "/repos/owner/relay/git/commits"):
@@ -809,4 +810,22 @@ private final class GitHubResourcePublishURLProtocol: URLProtocol, @unchecked Se
     }
 
     override func stopLoading() {}
+
+    private static func bodyData(from request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        let bufferSize = 4_096
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+        defer { buffer.deallocate() }
+        while true {
+            let count = stream.read(buffer, maxLength: bufferSize)
+            guard count >= 0 else { return nil }
+            if count == 0 { break }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
 }
