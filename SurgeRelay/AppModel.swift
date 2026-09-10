@@ -1787,7 +1787,7 @@ final class AppModel {
         var header = [name, desc].compactMap { $0 }
         header.append("#!category=Surge Relay")
         header.append(contentsOf: remainingMetadata)
-        return (header + [body]).filter { !$0.isEmpty }.joined(separator: "\n") + "\n"
+        return header.joined(separator: "\n") + (body.isEmpty ? "\n" : "\n\n\(body)\n")
     }
 
     private func removeExportedIndividualFiles(moduleID: UUID, outputFileName: String) async throws {

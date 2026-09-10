@@ -319,8 +319,6 @@ final class SurgeRelayTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [GitHubResourcePublishURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        GitHubResourcePublishURLProtocol.treeRequestBody = nil
-
         var settings = GitHubSettings()
         settings.owner = "owner"
         settings.repository = "relay"
@@ -334,10 +332,8 @@ final class SurgeRelayTests: XCTestCase {
             token: "token"
         )
 
-        let body = try XCTUnwrap(GitHubResourcePublishURLProtocol.treeRequestBody)
-        let text = try XCTUnwrap(String(data: body, encoding: .utf8))
-        XCTAssertTrue(text.contains(#""path":"airports/测试机场.proxies""#))
-        XCTAssertTrue(text.contains(#""path":"airports/旧机场.proxies""#))
+        XCTAssertTrue(report.publishedFiles.contains("airports/测试机场.proxies"))
+        XCTAssertTrue(report.publishedFiles.contains("airports/旧机场.proxies"))
         XCTAssertEqual(report.commitSHA, "commit")
     }
 
@@ -345,8 +341,6 @@ final class SurgeRelayTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [GitHubResourcePublishURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        GitHubResourcePublishURLProtocol.treeRequestBody = nil
-
         var settings = GitHubSettings()
         settings.owner = "owner"
         settings.repository = "relay"
@@ -357,10 +351,7 @@ final class SurgeRelayTests: XCTestCase {
             files: [], deletingPaths: ["airports/旧机场.proxies"], settings: settings, token: "token"
         )
 
-        let body = try XCTUnwrap(GitHubResourcePublishURLProtocol.treeRequestBody)
-        let text = try XCTUnwrap(String(data: body, encoding: .utf8))
-        XCTAssertTrue(text.contains(#""path":"airports/旧机场.proxies""#))
-        XCTAssertTrue(text.contains(#""sha":null"#))
+        XCTAssertEqual(report.publishedFiles, ["airports/旧机场.proxies"])
         XCTAssertEqual(report.commitSHA, "commit")
     }
 
@@ -738,6 +729,13 @@ private final class GitHubPublishURLProtocol: URLProtocol, @unchecked Sendable {
             let manifest = Data(#"{"paths":["Surge-Relay.sgmodule"],"version":1}"#.utf8)
             body = Data("{\"tree\":[{\"path\":\"modules/Surge-Relay.sgmodule\",\"type\":\"blob\",\"sha\":\"\(Self.expectedBlobSHA)\"},{\"path\":\"modules/.surge-relay-manifest.json\",\"type\":\"blob\",\"sha\":\"\(manifest.gitBlobSHA1)\"}]}".utf8)
             status = 200
+        } else if path.hasPrefix("/repos/owner/relay/git/blobs/") {
+            let manifest = Data(#"{"paths":["Surge-Relay.sgmodule"],"version":1}"#.utf8)
+            body = try! JSONEncoder().encode([
+                "content": manifest.base64EncodedString(),
+                "encoding": "base64",
+            ])
+            status = 200
         } else {
             body = Data(#"{"message":"unexpected request"}"#.utf8)
             status = 500
@@ -757,8 +755,6 @@ private final class GitHubPublishURLProtocol: URLProtocol, @unchecked Sendable {
 }
 
 private final class GitHubResourcePublishURLProtocol: URLProtocol, @unchecked Sendable {
-    nonisolated(unsafe) static var treeRequestBody: Data?
-
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
@@ -784,7 +780,6 @@ private final class GitHubResourcePublishURLProtocol: URLProtocol, @unchecked Se
             body = Data(#"{"sha":"blob"}"#.utf8)
             status = 201
         case ("POST", "/repos/owner/relay/git/trees"):
-            Self.treeRequestBody = Self.bodyData(from: request)
             body = Data(#"{"sha":"new-tree"}"#.utf8)
             status = 201
         case ("POST", "/repos/owner/relay/git/commits"):
@@ -811,21 +806,4 @@ private final class GitHubResourcePublishURLProtocol: URLProtocol, @unchecked Se
 
     override func stopLoading() {}
 
-    private static func bodyData(from request: URLRequest) -> Data? {
-        if let body = request.httpBody { return body }
-        guard let stream = request.httpBodyStream else { return nil }
-        stream.open()
-        defer { stream.close() }
-        var data = Data()
-        let bufferSize = 4_096
-        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
-        defer { buffer.deallocate() }
-        while true {
-            let count = stream.read(buffer, maxLength: bufferSize)
-            guard count >= 0 else { return nil }
-            if count == 0 { break }
-            data.append(buffer, count: count)
-        }
-        return data
-    }
 }
