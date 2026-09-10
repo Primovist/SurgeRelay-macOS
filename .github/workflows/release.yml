@@ -2,7 +2,8 @@ name: Release arm64
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths-ignore:
       - appcast.xml
   workflow_dispatch:
@@ -17,130 +18,460 @@ concurrency:
 jobs:
   release:
     runs-on: macos-26
+
     env:
       GH_TOKEN: ${{ github.token }}
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
       SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+
     steps:
-      - uses: actions/checkout@v5
+      - name: Checkout
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      # ------------------------------------------------------------
+      # 1. Generate release version
+      # ------------------------------------------------------------
       - name: Generate and validate version
         id: version
+        shell: bash
         run: |
-          version=$(sh Scripts/release-version.sh)
-          echo "$version" | grep -Eq '^[0-9]{12}$' || { echo "Invalid version: $version" >&2; exit 1; }
+          set -euo pipefail
+
+          version="$(sh Scripts/release-version.sh)"
+
+          echo "$version" | grep -Eq '^[0-9]{12}$' || {
+            echo "Invalid version: $version" >&2
+            exit 1
+          }
+
           if git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null 2>&1; then
             echo "Tag $version already exists. Retry after the next minute." >&2
             exit 1
           fi
-          if gh release view "$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+
+          if gh release view "$version" \
+            --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $version already exists. Retry after the next minute." >&2
             exit 1
           fi
-          test -n "$SPARKLE_PRIVATE_KEY" || { echo "Missing SPARKLE_PRIVATE_KEY secret" >&2; exit 1; }
-          test -n "$SPARKLE_PUBLIC_ED_KEY" || { echo "Missing SPARKLE_PUBLIC_ED_KEY variable" >&2; exit 1; }
+
+          test -n "${SPARKLE_PRIVATE_KEY:-}" || {
+            echo "Missing SPARKLE_PRIVATE_KEY secret" >&2
+            exit 1
+          }
+
+          test -n "${SPARKLE_PUBLIC_ED_KEY:-}" || {
+            echo "Missing SPARKLE_PUBLIC_ED_KEY variable" >&2
+            exit 1
+          }
+
+          echo "Release version: $version"
           echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------------
+      # 2. Resolve Swift Package Manager dependencies
+      # ------------------------------------------------------------
       - name: Resolve Swift packages
-        run: xcodebuild -resolvePackageDependencies -project "Surge Relay.xcodeproj" -scheme "Surge Relay"
+        run: |
+          set -euo pipefail
+
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project "Surge Relay.xcodeproj" \
+            -scheme "Surge Relay"
+
+      # ------------------------------------------------------------
+      # 3. Run arm64 tests
+      # ------------------------------------------------------------
       - name: Test arm64
         env:
           VERSION: ${{ steps.version.outputs.value }}
         run: |
+          set -euo pipefail
+
           xcodebuild test \
             -project "Surge Relay.xcodeproj" \
             -scheme "Surge Relay" \
             -configuration Debug \
             -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath "$RUNNER_TEMP/TestDerivedData" \
-            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO \
-            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$VERSION" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
+            CODE_SIGNING_ALLOWED=NO \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$VERSION" \
             SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY"
+
+      # ------------------------------------------------------------
+      # 4. Build arm64 Release
+      # ------------------------------------------------------------
       - name: Build arm64 Release
         env:
           VERSION: ${{ steps.version.outputs.value }}
         run: |
+          set -euo pipefail
+
           xcodebuild build \
             -project "Surge Relay.xcodeproj" \
             -scheme "Surge Relay" \
             -configuration Release \
             -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO \
-            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$VERSION" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
+            CODE_SIGNING_ALLOWED=NO \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$VERSION" \
             SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY"
+
+      # ------------------------------------------------------------
+      # 5. Verify application and create ZIP
+      # ------------------------------------------------------------
       - name: Verify bundle and create ZIP
         id: artifact
         env:
           VERSION: ${{ steps.version.outputs.value }}
         run: |
+          set -euo pipefail
+
           app="$RUNNER_TEMP/DerivedData/Build/Products/Release/Surge Relay.app"
+          plist="$app/Contents/Info.plist"
           executable="$app/Contents/MacOS/Surge Relay"
-          architectures=$(lipo -archs "$executable")
-          test "$architectures" = "arm64" || { echo "Expected arm64, got: $architectures" >&2; exit 1; }
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$VERSION"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" = "$VERSION"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$app/Contents/Info.plist")" = "https://raw.githubusercontent.com/Primovist/SurgeRelay-macOS/main/appcast.xml"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$app/Contents/Info.plist")" = "$SPARKLE_PUBLIC_ED_KEY"
-          # Sparkle rejects completely unsigned archives. Until a Developer ID
-          # identity is configured, apply a valid ad-hoc signature to the full
-          # bundle; this does not pretend that the app is notarized.
-          codesign --force --deep --sign - "$app"
-          codesign --verify --deep --strict "$app"
+
+          test -d "$app" || {
+            echo "Application bundle not found: $app" >&2
+            exit 1
+          }
+
+          test -f "$executable" || {
+            echo "Executable not found: $executable" >&2
+            exit 1
+          }
+
+          architectures="$(lipo -archs "$executable")"
+
+          echo "Application architectures: $architectures"
+
+          test "$architectures" = "arm64" || {
+            echo "Expected arm64, got: $architectures" >&2
+            exit 1
+          }
+
+          bundle_short_version="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :CFBundleShortVersionString' \
+              "$plist"
+          )"
+
+          bundle_version="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :CFBundleVersion' \
+              "$plist"
+          )"
+
+          feed_url="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :SUFeedURL' \
+              "$plist"
+          )"
+
+          public_key="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :SUPublicEDKey' \
+              "$plist"
+          )"
+
+          echo "CFBundleShortVersionString: $bundle_short_version"
+          echo "CFBundleVersion:            $bundle_version"
+          echo "SUFeedURL:                  $feed_url"
+
+          test "$bundle_short_version" = "$VERSION" || {
+            echo "CFBundleShortVersionString mismatch" >&2
+            exit 1
+          }
+
+          test "$bundle_version" = "$VERSION" || {
+            echo "CFBundleVersion mismatch" >&2
+            exit 1
+          }
+
+          test "$feed_url" = "https://raw.githubusercontent.com/Primovist/SurgeRelay-macOS/main/appcast.xml" || {
+            echo "Unexpected SUFeedURL: $feed_url" >&2
+            exit 1
+          }
+
+          test "$public_key" = "$SPARKLE_PUBLIC_ED_KEY" || {
+            echo "SUPublicEDKey mismatch" >&2
+            exit 1
+          }
+
+          #
+          # Sparkle rejects completely unsigned archives.
+          # Until Developer ID signing/notarization is configured,
+          # apply a valid ad-hoc signature to the complete app bundle.
+          #
+          codesign \
+            --force \
+            --deep \
+            --sign - \
+            "$app"
+
+          echo "Verifying ad-hoc code signature..."
+
+          codesign \
+            --verify \
+            --deep \
+            --strict \
+            --verbose=2 \
+            "$app"
+
           artifact="$GITHUB_WORKSPACE/Surge-Relay-$VERSION-arm64.zip"
-          ditto -c -k --sequesterRsrc --keepParent "$app" "$artifact"
-          unzip -l "$artifact" | grep -Fq 'Surge Relay.app/Contents/MacOS/Surge Relay'
+
+          rm -f "$artifact"
+
+          ditto \
+            -c \
+            -k \
+            --sequesterRsrc \
+            --keepParent \
+            "$app" \
+            "$artifact"
+
+          echo "Created artifact:"
+          ls -lh "$artifact"
+
+          unzip -l "$artifact" |
+            grep -Fq 'Surge Relay.app/Contents/MacOS/Surge Relay' || {
+              echo "Executable missing from ZIP archive" >&2
+              exit 1
+            }
+
           echo "path=$artifact" >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------------
+      # 6. Generate Sparkle appcast
+      # ------------------------------------------------------------
       - name: Generate signed Sparkle appcast
         env:
           VERSION: ${{ steps.version.outputs.value }}
           ARTIFACT: ${{ steps.artifact.outputs.path }}
         run: |
-          generator=$(find "$RUNNER_TEMP/DerivedData/SourcePackages" -type f -name generate_appcast -perm -111 -print -quit)
-          test -n "$generator" || { echo "Sparkle generate_appcast was not found" >&2; exit 1; }
+          set -euo pipefail
+
+          generator="$(
+            find "$RUNNER_TEMP/DerivedData/SourcePackages" \
+              -type f \
+              -name generate_appcast \
+              -perm -111 \
+              -print \
+              -quit
+          )"
+
+          test -n "$generator" || {
+            echo "Sparkle generate_appcast was not found" >&2
+            exit 1
+          }
+
+          echo "Sparkle generator:"
+          echo "$generator"
+
           feed_dir="$RUNNER_TEMP/appcast-current"
+
+          rm -rf "$feed_dir"
           mkdir -p "$feed_dir"
+
           cp "$ARTIFACT" "$feed_dir/"
-          printf '%s\n' "$SPARKLE_PRIVATE_KEY" | "$generator" \
-            --ed-key-file - \
-            --download-url-prefix "https://github.com/Primovist/SurgeRelay-macOS/releases/download/$VERSION/" \
-            "$feed_dir"
-          ruby Scripts/merge-appcast.rb "$feed_dir/appcast.xml" appcast.xml appcast.xml 10
-          xmllint --noout appcast.xml
-          grep -Fq "sparkle:version=\"$VERSION\"" appcast.xml
-          grep -Fq "sparkle:shortVersionString=\"$VERSION\"" appcast.xml
-          grep -Fq "releases/download/$VERSION/Surge-Relay-$VERSION-arm64.zip" appcast.xml
-          grep -Eq 'sparkle:edSignature="[^"]+"' appcast.xml
+
+          echo "Generating Sparkle appcast..."
+
+          printf '%s\n' "$SPARKLE_PRIVATE_KEY" |
+            "$generator" \
+              --ed-key-file - \
+              --download-url-prefix "https://github.com/Primovist/SurgeRelay-macOS/releases/download/$VERSION/" \
+              "$feed_dir"
+
+          test -f "$feed_dir/appcast.xml" || {
+            echo "Sparkle did not generate appcast.xml" >&2
+            exit 1
+          }
+
+          echo
+          echo "========== GENERATED APPCAST =========="
+          cat "$feed_dir/appcast.xml"
+          echo
+          echo "======================================="
+
+          ruby Scripts/merge-appcast.rb \
+            "$feed_dir/appcast.xml" \
+            appcast.xml \
+            appcast.xml \
+            10
+
+          echo
+          echo "============ MERGED APPCAST ==========="
+          cat appcast.xml
+          echo
+          echo "========================================"
+
+          # Validate XML
+          echo "[CHECK] XML syntax"
+
+          xmllint --noout appcast.xml || {
+            echo "ERROR: appcast.xml is invalid XML" >&2
+            exit 1
+          }
+
+          echo "OK: XML syntax"
+
+          # Sparkle supports both:
+          #
+          # <sparkle:version>123</sparkle:version>
+          #
+          # and older:
+          #
+          # sparkle:version="123"
+          #
+          echo "[CHECK] Sparkle version"
+
+          if grep -Fq "<sparkle:version>$VERSION</sparkle:version>" appcast.xml; then
+            echo "OK: sparkle:version element = $VERSION"
+
+          elif grep -Fq "sparkle:version=\"$VERSION\"" appcast.xml; then
+            echo "OK: sparkle:version attribute = $VERSION"
+
+          else
+            echo "ERROR: Sparkle version $VERSION not found" >&2
+            grep -n 'sparkle:version' appcast.xml || true
+            exit 1
+          fi
+
+          echo "[CHECK] Sparkle short version"
+
+          if grep -Fq "<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>" appcast.xml; then
+            echo "OK: sparkle:shortVersionString element = $VERSION"
+
+          elif grep -Fq "sparkle:shortVersionString=\"$VERSION\"" appcast.xml; then
+            echo "OK: sparkle:shortVersionString attribute = $VERSION"
+
+          else
+            echo "ERROR: Sparkle short version $VERSION not found" >&2
+            grep -n 'shortVersionString' appcast.xml || true
+            exit 1
+          fi
+
+          echo "[CHECK] Download URL"
+
+          grep -Fq \
+            "releases/download/$VERSION/Surge-Relay-$VERSION-arm64.zip" \
+            appcast.xml || {
+              echo "ERROR: Expected release URL not found" >&2
+              grep -n 'enclosure' appcast.xml || true
+              exit 1
+            }
+
+          echo "OK: Download URL"
+
+          echo "[CHECK] Sparkle EdDSA signature"
+
+          grep -Eq \
+            'sparkle:edSignature="[^"]+"' \
+            appcast.xml || {
+              echo "ERROR: sparkle:edSignature not found" >&2
+              grep -n 'edSignature' appcast.xml || true
+              exit 1
+            }
+
+          echo "OK: EdDSA signature"
+
+          echo
+          echo "Sparkle appcast validation passed for $VERSION"
+
+      # ------------------------------------------------------------
+      # 7. Create GitHub Release
+      # ------------------------------------------------------------
       - name: Create tag and GitHub Release
         env:
           VERSION: ${{ steps.version.outputs.value }}
           ARTIFACT: ${{ steps.artifact.outputs.path }}
         run: |
-          gh release create "$VERSION" "$ARTIFACT" \
+          set -euo pipefail
+
+          gh release create "$VERSION" \
+            "$ARTIFACT" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Surge Relay $VERSION" \
             --generate-notes
-          curl --fail --location --retry 5 \
+
+          echo "Verifying uploaded release artifact..."
+
+          curl \
+            --fail \
+            --location \
+            --retry 5 \
+            --retry-delay 2 \
             --output "$RUNNER_TEMP/release-check.zip" \
             "https://github.com/Primovist/SurgeRelay-macOS/releases/download/$VERSION/Surge-Relay-$VERSION-arm64.zip"
-          cmp "$ARTIFACT" "$RUNNER_TEMP/release-check.zip"
+
+          cmp \
+            "$ARTIFACT" \
+            "$RUNNER_TEMP/release-check.zip"
+
+          echo "Release artifact verified."
+
+      # ------------------------------------------------------------
+      # 8. Commit appcast.xml
+      # ------------------------------------------------------------
       - name: Commit appcast.xml to main
         env:
           VERSION: ${{ steps.version.outputs.value }}
         run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add appcast.xml
+
+          if git diff --cached --quiet; then
+            echo "appcast.xml has no changes"
+            exit 0
+          fi
+
           git commit -m "Update appcast for $VERSION"
           git push origin HEAD:main
+
+          echo "Waiting for published appcast to contain version $VERSION..."
+
           for attempt in 1 2 3 4 5; do
-            if curl --fail --silent --show-error \
-              "https://raw.githubusercontent.com/Primovist/SurgeRelay-macOS/main/appcast.xml?version=$VERSION" \
-              | grep -Fq "sparkle:version=\"$VERSION\""; then
+            published="$(
+              curl \
+                --fail \
+                --silent \
+                --show-error \
+                "https://raw.githubusercontent.com/Primovist/SurgeRelay-macOS/main/appcast.xml?version=$VERSION" \
+                || true
+            )"
+
+            if printf '%s\n' "$published" |
+              grep -Fq "<sparkle:version>$VERSION</sparkle:version>"; then
+
+              echo "Published appcast contains version $VERSION"
               exit 0
             fi
+
+            if printf '%s\n' "$published" |
+              grep -Fq "sparkle:version=\"$VERSION\""; then
+
+              echo "Published appcast contains version $VERSION"
+              exit 0
+            fi
+
+            echo "Attempt $attempt: appcast not updated yet"
             sleep 5
           done
+
           echo "Published appcast is not yet serving version $VERSION" >&2
           exit 1
