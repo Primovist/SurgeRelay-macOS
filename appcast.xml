@@ -1,9 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+<rss version='2.0' xmlns:sparkle='http://www.andymatuschak.org/xml-namespaces/sparkle'>
   <channel>
     <title>Surge Relay Updates</title>
     <link>https://github.com/Primovist/SurgeRelay-macOS</link>
     <description>Surge Relay arm64 releases maintained by Primovist.</description>
     <language>zh-CN</language>
+    <item>
+      <title>202609101428</title>
+      <pubDate>Thu, 10 Sep 2026 06:31:03 +0000</pubDate>
+      <sparkle:version>202609101428</sparkle:version>
+      <sparkle:shortVersionString>202609101428</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+      <enclosure url='https://github.com/Primovist/SurgeRelay-macOS/releases/download/202609101428/Surge-Relay-202609101428-arm64.zip' length='25736967' type='application/octet-stream' sparkle:edSignature='gkizoXXZWGKLHw6O3dkw0tX0/CTPxfEpmYBOCsIDteOKNNJ8ufTs4J7z8EOVStOshhbVpb1WFcp+ImJeLRi1DQ=='/>
+    </item>
   </channel>
 </rss>
