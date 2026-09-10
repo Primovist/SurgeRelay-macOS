@@ -36,6 +36,8 @@ Release Workflow 在代码进入 `main` 后自动运行，也保留 `workflow_di
 4. Workflow 生成 12 位版本并检查冲突，运行测试与 arm64 Release build。
 5. Workflow 通过 `lipo -archs` 验证主 executable 只有 `arm64`，检查两个 Bundle 版本、Feed URL 和公钥。
 6. Workflow 使用 Sparkle 官方 `generate_appcast` 从标准输入读取私钥，为 ZIP 生成 EdDSA 签名。
+
+当前未配置 Developer ID 时，Workflow 会在打包前对 App 使用 ad-hoc 签名，以满足 Sparkle 对归档内 App 完整代码签名的校验。ad-hoc 签名不是 Developer ID 签名，也不代表 Apple notarization；以后配置证书、公证与 stapling 时可替换这一处。
 7. Workflow 创建同名 Tag 与 `Surge Relay <版本>` Release，上传 `Surge-Relay-<版本>-arm64.zip`，实际下载并比对 ZIP。
 8. Workflow 将新条目与最多九条历史记录合并，校验 XML、版本、下载地址和签名后提交 `appcast.xml` 到 `main`。`push` 触发器忽略只有 `appcast.xml` 的提交，因此不会递归创建 Release。
 

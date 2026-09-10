@@ -82,6 +82,11 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" = "$VERSION"
           test "$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$app/Contents/Info.plist")" = "https://raw.githubusercontent.com/Primovist/SurgeRelay-macOS/main/appcast.xml"
           test "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$app/Contents/Info.plist")" = "$SPARKLE_PUBLIC_ED_KEY"
+          # Sparkle rejects completely unsigned archives. Until a Developer ID
+          # identity is configured, apply a valid ad-hoc signature to the full
+          # bundle; this does not pretend that the app is notarized.
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict "$app"
           artifact="$GITHUB_WORKSPACE/Surge-Relay-$VERSION-arm64.zip"
           ditto -c -k --sequesterRsrc --keepParent "$app" "$artifact"
           unzip -l "$artifact" | grep -Fq 'Surge Relay.app/Contents/MacOS/Surge Relay'
