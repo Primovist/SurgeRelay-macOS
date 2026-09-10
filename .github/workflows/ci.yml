@@ -30,6 +30,11 @@ jobs:
             SPARKLE_PUBLIC_ED_KEY="${{ vars.SPARKLE_PUBLIC_ED_KEY }}"
       - name: Verify executable architecture
         run: |
-          executable="$RUNNER_TEMP/DerivedData/Build/Products/Debug/Surge Relay.app/Contents/MacOS/Surge Relay"
+          app="$RUNNER_TEMP/DerivedData/Build/Products/Debug/Surge Relay.app"
+          executable="$app/Contents/MacOS/Surge Relay"
           architectures=$(lipo -archs "$executable")
           test "$architectures" = "arm64" || { echo "Expected arm64, got: $architectures" >&2; exit 1; }
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "$app/Contents/Info.plist")" = "Surge Relay"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$app/Contents/Info.plist")" = "Surge Relay"
+          test -f "$app/Contents/Resources/Assets.car"
+          test -f "$app/Contents/Resources/Surge Relay.icns"

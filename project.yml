@@ -45,6 +45,9 @@ targets:
       - path: SurgeRelay/WebResources
         type: folder
         buildPhase: resources
+      - path: Surge Relay.icon
+        buildPhase: resources
+        optional: true
     dependencies:
       - sdk: JavaScriptCore.framework
       - package: Sparkle

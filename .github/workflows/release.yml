@@ -168,6 +168,18 @@ jobs:
               "$plist"
           )"
 
+          icon_name="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :CFBundleIconName' \
+              "$plist"
+          )"
+
+          icon_file="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :CFBundleIconFile' \
+              "$plist"
+          )"
+
           echo "CFBundleShortVersionString: $bundle_short_version"
           echo "CFBundleVersion:            $bundle_version"
           echo "SUFeedURL:                  $feed_url"
@@ -189,6 +201,26 @@ jobs:
 
           test "$public_key" = "$SPARKLE_PUBLIC_ED_KEY" || {
             echo "SUPublicEDKey mismatch" >&2
+            exit 1
+          }
+
+          test "$icon_name" = "Surge Relay" || {
+            echo "CFBundleIconName mismatch: $icon_name" >&2
+            exit 1
+          }
+
+          test "$icon_file" = "Surge Relay" || {
+            echo "CFBundleIconFile mismatch: $icon_file" >&2
+            exit 1
+          }
+
+          test -f "$app/Contents/Resources/Assets.car" || {
+            echo "Compiled asset catalog is missing" >&2
+            exit 1
+          }
+
+          test -f "$app/Contents/Resources/Surge Relay.icns" || {
+            echo "Compiled Surge Relay app icon is missing" >&2
             exit 1
           }
 
