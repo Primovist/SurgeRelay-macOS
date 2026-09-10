@@ -1,6 +1,6 @@
 # 使用 GitHub 私有仓库与 Cloudflare Worker
 
-这份教程面向第一次接触 GitHub 与 Cloudflare 的用户。完成后，Surge Relay 会把生成的模块写入你的 **GitHub 私有仓库**，再由 **Cloudflare Worker** 提供一个不暴露 GitHub Token 的稳定订阅地址。
+这份教程面向第一次接触 GitHub 与 Cloudflare 的用户。完成后，Surge Relay 会把模块和机场代理资源写入你的 **GitHub 私有仓库**，再由 **Cloudflare Worker** 提供不暴露 GitHub Token、可以直接复制的稳定订阅地址。
 
 > 整个过程大约需要 10–15 分钟。GitHub 与 Cloudflare 的界面文字可能随版本略有变化，但设置名称和逻辑不变。
 
@@ -14,7 +14,7 @@
 | 创建 App 使用的可写 Token | [打开已预填 `Contents: write` 的 Token 页面](https://github.com/settings/personal-access-tokens/new?name=Surge+Relay&description=Surge+Relay+publishing&expires_in=365&contents=write) |
 | 创建 Worker 使用的只读 Token | [打开已预填 `Contents: read` 的 Token 页面](https://github.com/settings/personal-access-tokens/new?name=Surge+Relay+Worker&description=Cloudflare+Worker+read-only&expires_in=365&contents=read) |
 | 创建或管理 Cloudflare Worker | [打开 Cloudflare Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages) |
-| 获取最新 Worker 代码 | [打开 Worker 源码](https://github.com/EEliberto/SurgeRelay-macOS/blob/main/Deployment/CloudflareWorker/src/index.js) |
+| 获取最新 Worker 代码 | [打开 Worker 源码](https://github.com/Primovist/SurgeRelay-macOS/blob/main/Deployment/CloudflareWorker/src/index.js) |
 
 ## 开始前需要准备
 
@@ -97,11 +97,23 @@ const githubHeaders = (token) => ({
   "X-GitHub-Api-Version": "2022-11-28",
 });
 
-const encodePath = (path) => path
-  .split("/")
-  .filter(Boolean)
-  .map(encodeURIComponent)
-  .join("/");
+const encodePath = (path) => path.split("/").map(encodeURIComponent).join("/");
+
+const resolveRepositoryPath = (pathname) => {
+  let parts;
+  try {
+    parts = pathname.replace(/^\/+/, "").split("/").map(decodeURIComponent);
+  } catch { return null; }
+  if (parts.some(part => !part || part === "." || part === ".." || part.includes("/")
+    || part.includes("\\") || /[\u0000-\u001f\u007f]/u.test(part))) return null;
+  const path = parts.join("/");
+  if (/^modules\/[^/]+\.sgmodule$/u.test(path)
+    || /^airports\/[^/]+\.proxies$/u.test(path)
+    || /^modules\/assets\/(?:[^/]+\/)*[^/]+\.js$/u.test(path)) return path;
+  if (/^[^/]+\.sgmodule$/u.test(path)) return `modules/${path}`;
+  if (/^assets\/(?:[^/]+\/)*[^/]+\.js$/u.test(path)) return `modules/${path}`;
+  return null;
+};
 
 export default {
   async fetch(request, env) {
@@ -113,33 +125,21 @@ export default {
     }
 
     const url = new URL(request.url);
-    let requestedPath;
-    try {
-      requestedPath = decodeURIComponent(url.pathname).replace(/^\/+/, "");
-    } catch {
-      return new Response("Bad Request", { status: 400 });
-    }
-
-    if (!requestedPath) {
+    if (url.pathname === "/" || url.pathname === "") {
       return Response.json({ service: "Surge Relay", status: "ok" }, {
         headers: { "Cache-Control": "no-store" },
       });
     }
 
-    const isModule = requestedPath.endsWith(".sgmodule");
-    const isGeneratedAsset = requestedPath.startsWith("assets/")
-      && requestedPath.endsWith(".js");
-    if (requestedPath.includes("..") || (!isModule && !isGeneratedAsset)) {
-      return new Response("Not Found", { status: 404 });
-    }
+    const repositoryPath = resolveRepositoryPath(url.pathname);
+    if (!repositoryPath) return new Response("Not Found", { status: 404 });
 
     if (!env.GITHUB_TOKEN) {
       return new Response("Worker is not configured", { status: 503 });
     }
 
-    const repositoryPath = encodePath(`${env.GITHUB_DIRECTORY}/${requestedPath}`);
     const branch = encodeURIComponent(env.GITHUB_BRANCH || "main");
-    const apiURL = `https://api.github.com/repos/${encodeURIComponent(env.GITHUB_OWNER)}/${encodeURIComponent(env.GITHUB_REPOSITORY)}/contents/${repositoryPath}?ref=${branch}`;
+    const apiURL = `https://api.github.com/repos/${encodeURIComponent(env.GITHUB_OWNER)}/${encodeURIComponent(env.GITHUB_REPOSITORY)}/contents/${encodePath(repositoryPath)}?ref=${branch}`;
     const upstream = await fetch(apiURL, {
       headers: githubHeaders(env.GITHUB_TOKEN),
     });
@@ -154,9 +154,9 @@ export default {
     const headers = new Headers(upstream.headers);
     headers.set("Access-Control-Allow-Origin", "*");
     headers.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
-    headers.set("Content-Type", isModule
-      ? "text/plain; charset=utf-8"
-      : "application/javascript; charset=utf-8");
+    headers.set("Content-Type", repositoryPath.endsWith(".js")
+      ? "application/javascript; charset=utf-8"
+      : "text/plain; charset=utf-8");
     headers.delete("Authorization");
     headers.delete("Set-Cookie");
 
@@ -170,7 +170,7 @@ export default {
 
 </details>
 
-最新代码也可以在项目的 [`Deployment/CloudflareWorker/src/index.js`](../Deployment/CloudflareWorker/src/index.js) 中找到；如果只需要复制代码，可以直接[打开 Worker 源码页面](https://github.com/EEliberto/SurgeRelay-macOS/blob/main/Deployment/CloudflareWorker/src/index.js)。
+最新代码也可以在项目的 [`Deployment/CloudflareWorker/src/index.js`](../Deployment/CloudflareWorker/src/index.js) 中找到；如果只需要复制代码，可以直接[打开 Worker 源码页面](https://github.com/Primovist/SurgeRelay-macOS/blob/main/Deployment/CloudflareWorker/src/index.js)。
 
 ## 第五步：配置 Worker 变量与 Secret
 
@@ -183,7 +183,6 @@ export default {
 | Text | `GITHUB_OWNER` | `your-name` |
 | Text | `GITHUB_REPOSITORY` | `Surge-Relay` |
 | Text | `GITHUB_BRANCH` | `main` |
-| Text | `GITHUB_DIRECTORY` | `modules` |
 | **Secret** | `GITHUB_TOKEN` | 第三步创建的只读 Token |
 
 `GITHUB_OWNER` 是 GitHub 用户名，不是邮箱或昵称。`GITHUB_TOKEN` 必须选择 **Secret** 类型。
@@ -200,7 +199,7 @@ https://surge-relay.your-subdomain.workers.dev
 {"service":"Surge Relay","status":"ok"}
 ```
 
-此时访问 `/Surge-Relay.sgmodule` 返回 `Not Found` 是正常的，因为 App 还没有首次发布模块。
+此时访问 `/modules/Surge-Relay.sgmodule` 返回 `Not Found` 是正常的，因为 App 还没有首次发布模块。
 
 ## 第六步：在 Surge Relay 中完成设置
 
@@ -224,8 +223,16 @@ https://surge-relay.your-subdomain.workers.dev
 看到“GitHub 与 Cloudflare 已验证”后即设置完成。最终汇总模块地址为：
 
 ```text
-https://你的-worker-地址/Surge-Relay.sgmodule
+https://你的-worker-地址/modules/Surge-Relay.sgmodule
 ```
+
+机场选择“发布为 .proxies”后，对应地址为：
+
+```text
+https://你的-worker-地址/airports/URL编码后的机场名称.proxies
+```
+
+App 的模块和机场界面都会显示“拷贝地址”。仓库根目录中的 `modules/` 与 `airports/` 始终平级；旧版 `/名称.sgmodule` 和 `/assets/*.js` 地址仍由 Worker 兼容映射。
 
 ## 常见问题
 

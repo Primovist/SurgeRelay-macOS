@@ -707,8 +707,8 @@ struct SettingsView: View {
             Section("项目") {
                 aboutLink(
                     title: "Surge Relay",
-                    detail: "EEliberto/SurgeRelay-macOS",
-                    url: "https://github.com/EEliberto/SurgeRelay-macOS",
+                    detail: "\(ForkConfiguration.repositoryOwner)/\(ForkConfiguration.repositoryName)",
+                    url: ForkConfiguration.sourceURL.absoluteString,
                     image: .asset("GitHubIcon")
                 )
 
@@ -916,7 +916,7 @@ struct SettingsView: View {
         model.settings.github.owner = repository.owner
         model.settings.github.repository = repository.repository
         if model.settings.github.branch.isEmpty { model.settings.github.branch = "main" }
-        if model.settings.github.directory.isEmpty { model.settings.github.directory = "modules" }
+        model.settings.github.directory = GitHubResourcePath.modulesDirectory
         model.settings.github.publicBaseURL = githubCloudflareInput.trimmingCharacters(in: .whitespacesAndNewlines)
         if model.isClientMode {
             Task { await model.pushRemoteSyncSettings() }

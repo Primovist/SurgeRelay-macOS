@@ -125,8 +125,16 @@ final class SurgeRelayTests: XCTestCase {
         XCTAssertNil(settings.publicURL(for: "Demo.sgmodule"))
         settings.publicBaseURL = "https://surge-relay.example.workers.dev/"
         XCTAssertEqual(
+            try XCTUnwrap(settings.publicURL(for: "test.sgmodule")).absoluteString,
+            "https://surge-relay.example.workers.dev/modules/test.sgmodule"
+        )
+        XCTAssertEqual(
             try XCTUnwrap(settings.publicURL(for: "assets/demo/script.js")).absoluteString,
-            "https://surge-relay.example.workers.dev/assets/demo/script.js"
+            "https://surge-relay.example.workers.dev/modules/assets/demo/script.js"
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(settings.publicURL(repositoryPath: "airports/测试 机场.proxies")).absoluteString,
+            "https://surge-relay.example.workers.dev/airports/%E6%B5%8B%E8%AF%95%20%E6%9C%BA%E5%9C%BA.proxies"
         )
     }
 
@@ -305,6 +313,55 @@ final class SurgeRelayTests: XCTestCase {
         )
         XCTAssertTrue(report.publishedFiles.isEmpty)
         XCTAssertNil(report.commitSHA)
+    }
+
+    func testGitHubResourceRenameUploadsNewPathAndDeletesOldPathAtomically() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GitHubResourcePublishURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        GitHubResourcePublishURLProtocol.treeRequestBody = nil
+
+        var settings = GitHubSettings()
+        settings.owner = "owner"
+        settings.repository = "relay"
+        settings.branch = "main"
+        settings.publicBaseURL = "https://relay.example.workers.dev"
+
+        let report = try await GitHubClient(session: session).publishResources(
+            files: [PublishFile(name: "airports/测试机场.proxies", data: Data("Node = direct\n".utf8))],
+            deletingPaths: ["airports/旧机场.proxies"],
+            settings: settings,
+            token: "token"
+        )
+
+        let body = try XCTUnwrap(GitHubResourcePublishURLProtocol.treeRequestBody)
+        let text = try XCTUnwrap(String(data: body, encoding: .utf8))
+        XCTAssertTrue(text.contains(#""path":"airports/测试机场.proxies""#))
+        XCTAssertTrue(text.contains(#""path":"airports/旧机场.proxies""#))
+        XCTAssertEqual(report.commitSHA, "commit")
+    }
+
+    func testGitHubResourceDeleteUsesAirportRootPath() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GitHubResourcePublishURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        GitHubResourcePublishURLProtocol.treeRequestBody = nil
+
+        var settings = GitHubSettings()
+        settings.owner = "owner"
+        settings.repository = "relay"
+        settings.branch = "main"
+        settings.publicBaseURL = "https://relay.example.workers.dev"
+
+        let report = try await GitHubClient(session: session).publishResources(
+            files: [], deletingPaths: ["airports/旧机场.proxies"], settings: settings, token: "token"
+        )
+
+        let body = try XCTUnwrap(GitHubResourcePublishURLProtocol.treeRequestBody)
+        let text = try XCTUnwrap(String(data: body, encoding: .utf8))
+        XCTAssertTrue(text.contains(#""path":"airports/旧机场.proxies""#))
+        XCTAssertTrue(text.contains(#""sha":null"#))
+        XCTAssertEqual(report.commitSHA, "commit")
     }
 
     func testModuleArgumentsAreMaterializedAndMetadataIsRemoved() {
@@ -688,6 +745,62 @@ private final class GitHubPublishURLProtocol: URLProtocol, @unchecked Sendable {
             url: request.url!,
             statusCode: status,
             httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+private final class GitHubResourcePublishURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var treeRequestBody: Data?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let path = request.url?.path ?? ""
+        let method = request.httpMethod ?? "GET"
+        let body: Data
+        let status: Int
+        switch (method, path) {
+        case ("GET", "/repos/owner/relay"):
+            body = Data(#"{"private":true}"#.utf8)
+            status = 200
+        case ("GET", "/repos/owner/relay/git/ref/heads/main"):
+            body = Data(#"{"object":{"sha":"head"}}"#.utf8)
+            status = 200
+        case ("GET", "/repos/owner/relay/git/commits/head"):
+            body = Data(#"{"sha":"head","tree":{"sha":"tree"}}"#.utf8)
+            status = 200
+        case ("GET", "/repos/owner/relay/git/trees/tree"):
+            body = Data(#"{"tree":[{"path":"airports/旧机场.proxies","type":"blob","sha":"old"}]}"#.utf8)
+            status = 200
+        case ("POST", "/repos/owner/relay/git/blobs"):
+            body = Data(#"{"sha":"blob"}"#.utf8)
+            status = 201
+        case ("POST", "/repos/owner/relay/git/trees"):
+            Self.treeRequestBody = request.httpBody
+            body = Data(#"{"sha":"new-tree"}"#.utf8)
+            status = 201
+        case ("POST", "/repos/owner/relay/git/commits"):
+            body = Data(#"{"sha":"commit","tree":{"sha":"new-tree"}}"#.utf8)
+            status = 201
+        case ("PATCH", "/repos/owner/relay/git/refs/heads/main"):
+            body = Data(#"{"object":{"sha":"commit"}}"#.utf8)
+            status = 200
+        case ("GET", "/repos/owner/relay/git/commits/commit"):
+            body = Data(#"{"sha":"commit","tree":{"sha":"new-tree"}}"#.utf8)
+            status = 200
+        default:
+            body = Data("{\"message\":\"unexpected \(method) \(path)\"}".utf8)
+            status = 500
+        }
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: status, httpVersion: "HTTP/1.1",
             headerFields: ["Content-Type": "application/json"]
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)

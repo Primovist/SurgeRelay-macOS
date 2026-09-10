@@ -283,8 +283,10 @@ extension AppModel {
                     nodeNameOptimization: payload.nodeNameOptimization ?? AirportNodeNameOptimization(),
                     nodeProcessing: payload.nodeProcessing ?? AirportNodeProcessingOptions(),
                     iconURL: payload.iconURL,
+                    outputMode: payload.outputMode ?? .configuration,
                     isEnabled: payload.isEnabled,
                     lastUpdatedAt: payload.lastUpdatedAt,
+                    lastPublishedAt: payload.lastPublishedAt,
                     lastError: payload.lastError
                 )
             }

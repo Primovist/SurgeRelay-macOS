@@ -123,10 +123,22 @@
       <div class="form-content">
         <section class="editor-section"><h3>机场</h3><div class="editor-group">
           <label class="form-row"><span>名称</span><input name="name" type="text" required placeholder="例如 FlowerCloud"></label>
-          <label class="form-row switch-row"><span>写入 Surge 配置</span><input name="isEnabled" type="checkbox" role="switch" checked><span class="toggle-track" aria-hidden="true"></span></label>
+          <label class="form-row switch-row"><span>启用机场</span><input name="isEnabled" type="checkbox" role="switch" checked><span class="toggle-track" aria-hidden="true"></span></label>
         </div></section>
         <section class="editor-section"><h3>订阅</h3><div class="editor-group">
           <label class="form-row"><span>订阅链接</span><input name="sourceURL" type="url" required placeholder="https://…"></label>
+        </div></section>
+        <section class="editor-section"><h3>节点输出方式</h3><div class="editor-group">
+          <label class="form-row"><span>写入 Surge 配置</span><input name="outputMode" type="radio" value="configuration" checked></label>
+          <label class="form-row"><span>发布为 .proxies</span><input name="outputMode" type="radio" value="proxyResource"></label>
+        </div></section>
+        <section class="editor-section" data-airport-output="configuration"><h3>目标 Surge 配置</h3><div class="editor-group">
+          <div class="settings-info-row"><small>使用机场订阅汇总页中已启用的 Surge 配置文件。</small></div>
+        </div></section>
+        <section class="editor-section" data-airport-output="proxyResource" hidden><h3>GitHub 发布</h3><div class="editor-group">
+          <div class="settings-info-row"><strong>文件</strong><span data-airport-resource-path>—</span></div>
+          <div class="settings-info-row"><strong>发布地址</strong><small data-airport-resource-url>请先配置并验证 GitHub 与 Cloudflare Worker。</small></div>
+          <div class="settings-inline-actions"><button class="button" type="button" data-airport-copy-url disabled><span class="symbol" data-symbol="copy"></span>拷贝地址</button><button class="button" type="button" data-airport-publish-now disabled><span class="symbol" data-symbol="square.and.arrow.up"></span>立即发布</button></div>
         </div></section>
         <section class="editor-section"><h3>节点筛选</h3><div class="editor-group">
           <label class="form-row switch-row"><span>过滤流量、到期等订阅信息节点</span><input name="filtersMetadataNodes" type="checkbox" role="switch" checked><span class="toggle-track" aria-hidden="true"></span></label>

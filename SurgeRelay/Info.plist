@@ -34,8 +34,8 @@
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/EEliberto/SurgeRelay-macOS/main/appcast.xml</string>
+	<string>https://raw.githubusercontent.com/Primovist/SurgeRelay-macOS/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>FEcOaL+hwqoGMoia0HFa+ejmGKDUH/NNyyUDf9kEOBQ=</string>
+	<string>$(SPARKLE_PUBLIC_ED_KEY)</string>
 </dict>
 </plist>

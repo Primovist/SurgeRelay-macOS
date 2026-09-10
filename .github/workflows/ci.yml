@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+
+jobs:
+  arm64:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate release version format
+        run: |
+          sh Scripts/test-release-version.sh
+          ruby Scripts/test-merge-appcast.rb
+      - name: Test Cloudflare Worker routes
+        run: npm test --prefix Deployment/CloudflareWorker
+      - name: Resolve Swift packages
+        run: xcodebuild -resolvePackageDependencies -project "Surge Relay.xcodeproj" -scheme "Surge Relay"
+      - name: Build and test arm64
+        run: |
+          xcodebuild test \
+            -project "Surge Relay.xcodeproj" \
+            -scheme "Surge Relay" \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO \
+            SPARKLE_PUBLIC_ED_KEY="${{ vars.SPARKLE_PUBLIC_ED_KEY }}"
+      - name: Verify executable architecture
+        run: |
+          executable="$RUNNER_TEMP/DerivedData/Build/Products/Debug/Surge Relay.app/Contents/MacOS/Surge Relay"
+          architectures=$(lipo -archs "$executable")
+          test "$architectures" = "arm64" || { echo "Expected arm64, got: $architectures" >&2; exit 1; }

@@ -1,5 +1,7 @@
 .DS_Store
 /SPARKLE_SIGNING_KEY.md
+/surge-relay-sparkle-private-key*
+/.sparkle-private-key*
 Build/
 build/
 .build/

@@ -280,7 +280,7 @@ enum WebManagementAPI {
             model.settings.githubToken = model.githubToken
         }
         if model.settings.github.branch.isEmpty { model.settings.github.branch = "main" }
-        if model.settings.github.directory.isEmpty { model.settings.github.directory = "modules" }
+        model.settings.github.directory = GitHubResourcePath.modulesDirectory
         model.saveSettings()
     }
 
@@ -451,10 +451,10 @@ enum WebManagementAPI {
             switch request.method {
             case "PUT":
                 let mutation = try request.decodeBody(WebAirportMutation.self)
-                try model.updateAirportSubscription(id: id, from: mutation.draft(existing: subscription))
+                try await model.updateAirportSubscriptionAndPublish(id: id, from: mutation.draft(existing: subscription))
                 return .json(ActionPayload(ok: true, message: model.statusMessage))
             case "DELETE":
-                model.removeAirportSubscription(id: id)
+                try await model.removeAirportSubscriptionForCurrentMode(id: id)
                 return .json(ActionPayload(ok: true, message: model.statusMessage))
             default: throw WebAPIError.methodNotAllowed
             }
@@ -467,6 +467,9 @@ enum WebManagementAPI {
             return .json(ActionPayload(ok: true, message: payload.enabled ? "已启用 \(subscription.name)。" : "已停用 \(subscription.name)。"))
         case ("POST", "refresh"):
             try await model.refreshAirportSubscription(id: id)
+            return .json(ActionPayload(ok: true, message: model.statusMessage))
+        case ("POST", "publish"):
+            try await model.publishAirportSubscriptionForCurrentMode(id: id)
             return .json(ActionPayload(ok: true, message: model.statusMessage))
         case ("GET", "preview"):
             guard model.hasCachedAirportSubscription(id: id) else { throw WebAPIError.airportCacheMissing }
@@ -571,8 +574,11 @@ enum WebManagementAPI {
                     nodeNameOptimization: $0.nodeNameOptimization,
                     nodeProcessing: $0.nodeProcessing,
                     iconURL: $0.iconURL,
+                    outputMode: $0.outputMode,
                     isEnabled: $0.isEnabled, lastUpdatedAt: $0.lastUpdatedAt,
-                    lastError: $0.lastError, hasCache: model.hasCachedAirportSubscription(id: $0.id)
+                    lastPublishedAt: $0.lastPublishedAt,
+                    lastError: $0.lastError, hasCache: model.hasCachedAirportSubscription(id: $0.id),
+                    publishedURL: model.airportPublishedURL(for: $0)?.absoluteString
                 )
             },
             configurations: model.surgeConfigurationTargets.map {
@@ -719,10 +725,13 @@ private struct WebAirportPayload: Encodable {
     let nodeNameOptimization: AirportNodeNameOptimization
     let nodeProcessing: AirportNodeProcessingOptions
     let iconURL: String
+    let outputMode: AirportOutputMode
     let isEnabled: Bool
     let lastUpdatedAt: Date?
+    let lastPublishedAt: Date?
     let lastError: String?
     let hasCache: Bool
+    let publishedURL: String?
 }
 
 private struct WebConfigurationPayload: Encodable {
@@ -740,6 +749,7 @@ private struct WebAirportMutation: Decodable {
     let nodeNameOptimization: AirportNodeNameOptimization?
     let nodeProcessing: AirportNodeProcessingOptions?
     let iconURL: String?
+    let outputMode: AirportOutputMode?
     let isEnabled: Bool?
 
     func draft(existing: AirportSubscription? = nil) -> AirportSubscriptionDraft {
@@ -751,6 +761,7 @@ private struct WebAirportMutation: Decodable {
         if let nodeNameOptimization { draft.nodeNameOptimization = nodeNameOptimization }
         if let nodeProcessing { draft.nodeProcessing = nodeProcessing }
         if let iconURL { draft.iconURL = iconURL }
+        if let outputMode { draft.outputMode = outputMode }
         if let isEnabled { draft.isEnabled = isEnabled }
         return draft
     }

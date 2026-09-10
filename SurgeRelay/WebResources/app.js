@@ -150,6 +150,7 @@ let editingAirportID = null;
 let editingConfigurationID = null;
 let previewingAirportID = null;
 let airportPreviewMode = 'changes';
+let editingAirportOriginalPayload = null;
 /** @type {{ moduleID: string, arguments: Array<{key: string, defaultValue: string, value: string}>, help: string|null } | null} */
 let moduleArgumentsState = null;
 let moduleArgumentsLoadToken = 0;
@@ -293,10 +294,18 @@ ui.moduleForm.addEventListener('submit', saveModule);
 ui.airportForm?.addEventListener('submit', saveAirport);
 ui.airportForm?.elements.optimizeNodeNames?.addEventListener('change', syncAirportNameOptimizationControls);
 ui.airportForm?.elements.nodeSortOrder?.addEventListener('change', syncAirportProcessingControls);
+ui.airportForm?.addEventListener('change', syncAirportOutputControls);
+ui.airportForm?.elements.name?.addEventListener('input', syncAirportOutputControls);
 ui.airportForm?.elements.removeNodeNameEmoji?.addEventListener('change', updateAirportNameExample);
 ui.airportForm?.elements.nodeNameRemovalTerms?.addEventListener('input', updateAirportNameExample);
 ui.airportForm?.addEventListener('input', handleAirportKeywordInput);
-ui.airportForm?.addEventListener('click', handleAirportKeywordClick);
+ui.airportForm?.addEventListener('click', event => {
+  handleAirportKeywordClick(event);
+  const copy = event.target.closest('[data-airport-copy-url]');
+  if (copy && !copy.disabled) copyText(copy.dataset.value, copy);
+  const publish = event.target.closest('[data-airport-publish-now]');
+  if (publish && !publish.disabled) publishAirport(editingAirportID, publish);
+});
 ui.airportForm?.addEventListener('keydown', handleAirportKeywordKeyDown);
 ui.configurationForm?.addEventListener('submit', saveConfiguration);
 ui.confirmCancel.addEventListener('click', () => resolveConfirmation(false));
@@ -714,7 +723,7 @@ function renderAirportDetail(animate = true) {
   const overview = state.airports || { subscriptions: [], configurations: [], configurationPreview: '' };
   const subscriptions = overview.subscriptions || [];
   const configurations = overview.configurations || [];
-  const canWrite = subscriptions.some(item => item.isEnabled && item.hasCache)
+  const canWrite = subscriptions.some(item => item.isEnabled && item.hasCache && item.outputMode !== 'proxyResource')
     && configurations.some(item => item.isEnabled);
   const toolbar = `<button class="icon-button airport-add-button" data-action="add-airport" type="button" aria-label="添加机场" title="添加机场"><span class="symbol" data-symbol="plus"></span></button>`;
   setTemplateHTML(ui.desktopActions, toolbar);
@@ -733,7 +742,8 @@ function renderAirportDetail(animate = true) {
       <span class="module-icon ${airport.iconURL ? '' : 'placeholder'}">${icon}</span>
       <span class="airport-copy"><strong>${escapeHTML(airport.name)}</strong>${status}</span>
       <div class="airport-actions">
-        <label class="module-toggle" title="写入 Surge 配置"><input type="checkbox" data-airport-toggle="${airport.id}" ${airport.isEnabled ? 'checked' : ''}><span class="toggle-track" aria-hidden="true"></span></label>
+        <label class="module-toggle" title="启用机场"><input type="checkbox" data-airport-toggle="${airport.id}" ${airport.isEnabled ? 'checked' : ''}><span class="toggle-track" aria-hidden="true"></span></label>
+        ${airport.outputMode === 'proxyResource' && airport.publishedURL ? `<button class="button" data-action="copy" data-value="${escapeAttribute(airport.publishedURL)}" type="button"><span class="symbol" data-symbol="copy"></span>拷贝地址</button><button class="icon-button" data-action="publish-airport" data-airport-id="${airport.id}" type="button" title="立即发布" aria-label="立即发布"><span class="symbol" data-symbol="square.and.arrow.up"></span></button>` : ''}
         <button class="icon-button" data-action="refresh-airport" data-airport-id="${airport.id}" type="button" title="刷新" aria-label="刷新"><span class="symbol" data-symbol="refresh"></span></button>
         <button class="icon-button" data-action="preview-airport" data-airport-id="${airport.id}" type="button" title="预览缓存" aria-label="预览缓存" ${airport.hasCache ? '' : 'disabled'}><span class="symbol" data-symbol="doc.text"></span></button>
         <button class="button" data-action="edit-airport" data-airport-id="${airport.id}" type="button">编辑</button>
@@ -1184,6 +1194,7 @@ async function handleDetailClick(event) {
     break;
   }
   case 'refresh-airport': await refreshAirport(source.dataset.airportId, source); break;
+  case 'publish-airport': await publishAirport(source.dataset.airportId, source); break;
   case 'preview-airport': await previewAirport(source.dataset.airportId); break;
   case 'delete-airport': await deleteAirport(source.dataset.airportId); break;
   case 'add-configuration': openConfigurationEditor(); break;
@@ -1832,11 +1843,47 @@ function openAirportEditor(airport = null) {
   form.removeNodeNameEmoji.checked = airport?.nodeNameOptimization?.removesEmoji ?? true;
   form.nodeNameRemovalTerms.value = airport?.nodeNameOptimization?.removalTerms || 'IEPL, IPEL, 专线';
   form.iconURL.value = airport?.iconURL || '';
+  const outputMode = airport?.outputMode || 'configuration';
+  const outputControl = ui.airportForm.querySelector(`input[name="outputMode"][value="${outputMode}"]`);
+  if (outputControl) outputControl.checked = true;
   form.isEnabled.checked = airport?.isEnabled ?? true;
   syncAirportNameOptimizationControls();
   syncAirportProcessingControls();
+  editingAirportOriginalPayload = JSON.stringify(collectAirportPayload());
+  syncAirportOutputControls();
   openDialog(ui.airportDialog);
   setTimeout(() => (airport ? form.name : form.sourceURL).focus(), 180);
+}
+
+function airportResourceInfo(name) {
+  const trimmed = String(name || '').trim();
+  if (!trimmed || /[\\/]/.test(trimmed) || trimmed.includes('..')) return { path: null, url: null };
+  const path = `airports/${trimmed}.proxies`;
+  const base = String(state?.settings?.githubPublicBaseURL || '').replace(/\/+$/, '');
+  return { path, url: base ? `${base}/airports/${encodeURIComponent(trimmed)}.proxies` : null };
+}
+
+function syncAirportOutputControls() {
+  const form = ui.airportForm?.elements;
+  if (!form) return;
+  const mode = form.outputMode.value || 'configuration';
+  ui.airportForm.querySelectorAll('[data-airport-output]').forEach(section => {
+    section.hidden = section.dataset.airportOutput !== mode;
+  });
+  const info = airportResourceInfo(form.name.value);
+  const path = ui.airportForm.querySelector('[data-airport-resource-path]');
+  const url = ui.airportForm.querySelector('[data-airport-resource-url]');
+  const copy = ui.airportForm.querySelector('[data-airport-copy-url]');
+  const publish = ui.airportForm.querySelector('[data-airport-publish-now]');
+  if (path) path.textContent = info.path || '机场名称无效';
+  if (url) url.textContent = info.url || '请先配置并验证 GitHub 与 Cloudflare Worker。';
+  if (copy) {
+    copy.disabled = !info.url;
+    copy.dataset.value = info.url || '';
+    copy.dataset.action = info.url ? 'copy' : '';
+  }
+  const unchanged = editingAirportOriginalPayload === JSON.stringify(collectAirportPayload());
+  if (publish) publish.disabled = !editingAirportID || mode !== 'proxyResource' || !info.url || !unchanged;
 }
 
 function syncAirportNameOptimizationControls() {
@@ -1903,6 +1950,7 @@ function addAirportKeyword(editor) {
   hiddenInput.value = values.join(', ');
   input.value = '';
   renderAirportKeywordEditor(editor);
+  syncAirportOutputControls();
   input.focus();
 }
 
@@ -1926,6 +1974,7 @@ function handleAirportKeywordClick(event) {
   values.splice(Number(removeButton.dataset.keywordRemove), 1);
   hiddenInput.value = values.join(', ');
   renderAirportKeywordEditor(editor);
+  syncAirportOutputControls();
 }
 
 function handleAirportKeywordKeyDown(event) {
@@ -1950,8 +1999,23 @@ function updateAirportNameExample() {
 
 async function saveAirport(event) {
   event.preventDefault();
+  const payload = collectAirportPayload();
+  ui.saveAirport.disabled = true;
+  try {
+    const path = editingAirportID ? `/api/airports/${editingAirportID}` : '/api/airports';
+    const result = await api(path, { method: editingAirportID ? 'PUT' : 'POST', json: payload });
+    await closeDialog(ui.airportDialog);
+    showToast(result.message);
+    await loadState(false, true);
+  } catch (error) {
+    ui.airportDialogMessage.textContent = error.message;
+    ui.airportDialogMessage.hidden = false;
+  } finally { ui.saveAirport.disabled = false; }
+}
+
+function collectAirportPayload() {
   const form = ui.airportForm.elements;
-  const payload = {
+  return {
     name: form.name.value.trim(), sourceURL: form.sourceURL.value.trim(),
     policyRegexFilter: form.policyRegexFilter.value.trim(), nodeNameTemplate: form.nodeNameTemplate.value.trim(),
     nodeNameOptimization: {
@@ -1970,19 +2034,9 @@ async function saveAirport(event) {
       skipCertificateVerification: form.skipCertificateVerification.value
     },
     iconURL: form.iconURL.value.trim(),
+    outputMode: form.outputMode.value || 'configuration',
     isEnabled: form.isEnabled.checked
   };
-  ui.saveAirport.disabled = true;
-  try {
-    const path = editingAirportID ? `/api/airports/${editingAirportID}` : '/api/airports';
-    const result = await api(path, { method: editingAirportID ? 'PUT' : 'POST', json: payload });
-    await closeDialog(ui.airportDialog);
-    showToast(result.message);
-    await loadState(false, true);
-  } catch (error) {
-    ui.airportDialogMessage.textContent = error.message;
-    ui.airportDialogMessage.hidden = false;
-  } finally { ui.saveAirport.disabled = false; }
 }
 
 function openConfigurationEditor(configuration = null) {
@@ -2025,6 +2079,17 @@ async function refreshAirport(id, button) {
     await loadState(false, true);
   } catch (error) { showToast(error.message, true); }
   finally { button.disabled = false; button.classList.remove('is-spinning'); }
+}
+
+async function publishAirport(id, button) {
+  if (!id) return;
+  button.disabled = true;
+  try {
+    const result = await api(`/api/airports/${id}/publish`, { method: 'POST' });
+    showToast(result.message);
+    await loadState(false, true);
+  } catch (error) { showToast(error.message, true); }
+  finally { button.disabled = false; }
 }
 
 async function previewAirport(id) {
@@ -2091,7 +2156,10 @@ async function refreshAirportPreview() {
 
 async function deleteAirport(id) {
   const airport = state.airports?.subscriptions?.find(item => item.id === id);
-  if (!airport || !await askConfirmation('删除机场？', `“${airport.name}”及其缓存会被移除。`, '删除')) return;
+  const detail = airport?.outputMode === 'proxyResource'
+    ? `将先删除 GitHub 中 airports/${airport.name}.proxies；失败时本地机场不会被移除。`
+    : `“${airport?.name || ''}”及其缓存会被移除。`;
+  if (!airport || !await askConfirmation('删除机场？', detail, '删除')) return;
   try {
     const result = await api(`/api/airports/${id}`, { method: 'DELETE' });
     showToast(result.message);
@@ -2266,7 +2334,7 @@ function aboutSettingsMarkup(settings) {
   return `
     <section class="editor-section"><div class="settings-about-hero">${brandIconMarkup()}<strong>Surge Relay</strong><span>版本 ${escapeHTML(settings.appVersion || '—')}</span></div></section>
     <section class="editor-section"><h3>项目</h3><div class="editor-group">
-      ${settingsLinkRow('/github-icon.png?v=2', 'Surge Relay', 'EEliberto/SurgeRelay-macOS', 'https://github.com/EEliberto/SurgeRelay-macOS')}
+      ${settingsLinkRow('/github-icon.png?v=2', 'Surge Relay', 'Primovist/SurgeRelay-macOS', 'https://github.com/Primovist/SurgeRelay-macOS')}
       ${settingsLinkRow('/script-hub-icon.png?v=2', 'Script Hub', 'github.com/Script-Hub-Org', 'https://github.com/Script-Hub-Org')}
       ${settingsLinkRow('/surge-icon.png?v=2', 'Surge', 'nssurge.com', 'https://nssurge.com')}
     </div></section>`;

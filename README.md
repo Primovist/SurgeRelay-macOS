@@ -7,7 +7,7 @@
 
 
 <p align="center">
-  一款用于集中管理、转换、编辑和发布 Surge 模块的 macOS 应用程序。
+  一款用于集中管理、转换、编辑和发布 Surge 模块与机场节点的 macOS 应用程序。
 </p>
 
 <p align="center">
@@ -97,6 +97,29 @@ Surge Relay 提供图形化界面，用于查看和编辑模块内容。
   <img width="24%" alt="Surge Relay Portrait Preview" src="https://github.com/user-attachments/assets/b7e8040a-7dfa-4dd0-bbba-89446e933ea1" />
 </p>
 
+### 7. 机场订阅的两种输出方式
+
+机场订阅继续复用同一套下载、解析、过滤、重命名、节点处理和去重流程，并可在编辑界面二选一：
+
+- **写入 Surge 配置**：保持原有行为，将处理后的节点写入所选 Surge 配置。
+- **发布为 `.proxies`**：只生成 Surge Proxy Definition，不包含 `[Proxy]`、`[Proxy Group]` 或其他 Section；刷新成功后原子更新 GitHub 文件。
+
+GitHub 发布仓库使用两个根目录下的平级资源族：
+
+```text
+modules/*.sgmodule
+modules/assets/*.js
+airports/*.proxies
+```
+
+模块与机场界面都会给出可以直接复制的 Cloudflare Worker URL，分别采用 `/modules/...` 和 `/airports/...` 路径。机场文件名使用机场名称，中文、英文、数字和空格会被保留，URL 请求时逐段正确编码；非法路径名称和同名冲突会被阻止。
+
+## 构建、发布与自动更新
+
+本 fork 仅构建 Apple Silicon `arm64`。PR 与非 `main` 分支 push 会运行 arm64 编译、测试、Worker 路由测试和 executable 架构校验；代码进入 `main` 后自动执行正式 Release。GitHub Actions 的 **Release arm64 → Run workflow** 仍可用于手动补发。
+
+正式版本、Build、Tag 均为 Asia/Shanghai 构建时间生成的 12 位 `yyyyMMddHHmm`，不带 `v` 前缀。发布包名称为 `Surge-Relay-yyyyMMddHHmm-arm64.zip`。Actions 自动提交的纯 `appcast.xml` 变更不会再次触发 Release。Sparkle Feed 已切换到 `Primovist/SurgeRelay-macOS`，签名与首次部署步骤见 [Fork Release 与 Sparkle 配置](docs/Fork-Release-Sparkle.md)。
+
 ## 如果遇到“App 已损坏，无法打开，你应将其移到废纸篓”
 此提示并不代表 App 真的损坏。只是因为没有经过 Apple 付费公证，macOS 自动加上了“隔离”标记。
 
@@ -115,6 +138,8 @@ Surge Relay 提供图形化界面，用于查看和编辑模块内容。
 4.重新打开 Surge Relay，即可正常使用。
 
 ## 声明
+
+本仓库 fork 自 [EEliberto/SurgeRelay-macOS](https://github.com/EEliberto/SurgeRelay-macOS)。原项目版权、许可证、第三方声明与署名继续保留，详见 [LICENSE](LICENSE) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 本项目展示页面中的模块、模块名称、作者名称及相关来源，仅用于说明 Surge Relay 的模块管理、转换、汇总和分发能力，不代表本项目对任何模块内容、使用方式、适用场景或安全性的推荐、背书、指导或保证。
 

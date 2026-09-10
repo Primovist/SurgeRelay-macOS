@@ -113,6 +113,46 @@ struct AirportSubscriptionParserTests {
         #expect(subscription.nodeProcessing.filtersMetadataNodes)
         #expect(subscription.nodeProcessing.sortOrder == .original)
         #expect(subscription.nodeProcessing.udpRelay == .inherit)
+        #expect(subscription.outputMode == .configuration)
+        #expect(subscription.lastPublishedAt == nil)
+    }
+
+    @Test func decodesProxyResourceOutputMode() throws {
+        let data = Data(#"{"name":"Example","sourceURL":"https://example.com/sub","outputMode":"proxyResource"}"#.utf8)
+        let subscription = try JSONDecoder().decode(AirportSubscription.self, from: data)
+        #expect(subscription.outputMode == .proxyResource)
+    }
+
+    @Test func generatesPlainProxyResourceWithoutSurgeSections() throws {
+        let source = """
+        [Proxy]
+        香港 01 = trojan, hk.example.com, 443, password=secret
+        日本 01 = vmess, jp.example.com, 443, username=user
+        [Proxy Group]
+        Select = select, 香港 01, 日本 01
+        """
+        var subscription = AirportSubscription(name: "奶昔", outputMode: .proxyResource)
+        subscription.nodeNameOptimization.isEnabled = false
+
+        let output = try AirportSubscriptionParser.proxyResourceContent(
+            from: Data(source.utf8), for: subscription
+        )
+
+        #expect(output == "香港 01 = trojan, hk.example.com, 443, password=secret\n日本 01 = vmess, jp.example.com, 443, username=user\n")
+        #expect(!output.contains("[Proxy]"))
+        #expect(!output.contains("[Proxy Group]"))
+    }
+
+    @Test func validatesAirportRepositoryPathsAndPreservesReadableNames() throws {
+        #expect(try GitHubResourcePath.airport(named: "奶昔") == "airports/奶昔.proxies")
+        #expect(try GitHubResourcePath.airport(named: "Airport A") == "airports/Airport A.proxies")
+        #expect(throws: (any Error).self) { try GitHubResourcePath.airport(named: "a/b") }
+        #expect(throws: (any Error).self) { try GitHubResourcePath.airport(named: #"a\b"#) }
+        #expect(throws: (any Error).self) { try GitHubResourcePath.airport(named: "..") }
+        #expect(GitHubResourcePath.airportNamesConflict("Cafe\u{301}", "CAFÉ"))
+        #expect(GitHubResourcePath.airportNamesConflict("Airport A", "airport a"))
+        #expect(!GitHubResourcePath.airportNamesConflict("Airport A", "Airport B"))
+        #expect(GitHubResourcePath.module("test.sgmodule") == "modules/test.sgmodule")
     }
 
     @Test func appliesStructuredIncludeExcludeAndMetadataFilters() {

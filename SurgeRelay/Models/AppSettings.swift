@@ -1,5 +1,56 @@
 import Foundation
 
+enum ForkConfiguration {
+    static let repositoryOwner = "Primovist"
+    static let repositoryName = "SurgeRelay-macOS"
+    static let sourceURL = URL(string: "https://github.com/Primovist/SurgeRelay-macOS")!
+    static let appcastURL = URL(string: "https://raw.githubusercontent.com/Primovist/SurgeRelay-macOS/main/appcast.xml")!
+}
+
+enum GitHubResourcePath {
+    static let modulesDirectory = "modules"
+    static let airportsDirectory = "airports"
+
+    static func module(_ relativePath: String) -> String? {
+        guard let relativePath = validated(relativePath) else { return nil }
+        return "\(modulesDirectory)/\(relativePath)"
+    }
+
+    static func airport(named airportName: String) throws -> String {
+        let name = airportName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty,
+              !name.contains("/"), !name.contains("\\"), !name.contains(".."),
+              !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+            throw RelayError.invalidOutput("机场名称不能包含 /、\\、.. 或控制字符。")
+        }
+        return "\(airportsDirectory)/\(name).proxies"
+    }
+
+    static func collisionKey(forAirportName airportName: String) -> String {
+        airportName.trimmingCharacters(in: .whitespacesAndNewlines)
+            .precomposedStringWithCanonicalMapping
+            .folding(options: [.caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+    }
+
+    static func airportNamesConflict(_ lhs: String, _ rhs: String) -> Bool {
+        collisionKey(forAirportName: lhs) == collisionKey(forAirportName: rhs)
+    }
+
+    static func validated(_ path: String) -> String? {
+        guard path == path.trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty, !path.hasPrefix("/"), !path.hasSuffix("/"), !path.contains("\\"),
+              !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+            return nil
+        }
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard !components.isEmpty,
+              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            return nil
+        }
+        return path
+    }
+}
+
 enum RefreshPolicy {
     static func isDue(lastUpdatedAt: Date?, intervalMinutes: Int, now: Date = .now) -> Bool {
         guard intervalMinutes > 0 else { return false }
@@ -44,21 +95,33 @@ struct GitHubSettings: Codable, Equatable, Sendable {
     }
 
     func rawURL(for fileName: String) -> URL? {
-        guard isConfigured else { return nil }
-        let components = [owner, repository, branch, directory, fileName]
-            .filter { !$0.isEmpty }
-            .map { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? $0 }
-        return URL(string: "https://raw.githubusercontent.com/\(components.joined(separator: "/"))")
+        guard let path = GitHubResourcePath.module(fileName) else { return nil }
+        return rawURL(repositoryPath: path)
     }
 
     func publicURL(for fileName: String) -> URL? {
+        guard let path = GitHubResourcePath.module(fileName) else { return nil }
+        return publicURL(repositoryPath: path)
+    }
+
+    func rawURL(repositoryPath: String) -> URL? {
+        guard isConfigured, let path = GitHubResourcePath.validated(repositoryPath) else { return nil }
+        let components = [owner, repository, branch] + path.split(separator: "/").map(String.init)
+        return URL(string: "https://raw.githubusercontent.com/\(encodedPath(components))")
+    }
+
+    func publicURL(repositoryPath: String) -> URL? {
         guard repositoryIsPrivate == true, hasValidCloudflarePublicBaseURL else { return nil }
+        guard let path = GitHubResourcePath.validated(repositoryPath) else { return nil }
         let base = publicBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let path = fileName.split(separator: "/").map { component in
-            String(component).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String(component)
-        }.joined(separator: "/")
-        return URL(string: "\(base)/\(path)")
+        return URL(string: "\(base)/\(encodedPath(path.split(separator: "/").map(String.init)))")
+    }
+
+    private func encodedPath(_ components: [String]) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        return components.map { $0.addingPercentEncoding(withAllowedCharacters: allowed) ?? $0 }
+            .joined(separator: "/")
     }
 }
 

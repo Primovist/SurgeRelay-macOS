@@ -9,10 +9,13 @@ struct AirportSubscriptionsView: View {
     @State private var targetEditorRoute: ConfigurationTargetEditorRoute?
     @State private var deleteCandidate: AirportSubscription?
     @State private var refreshingID: UUID?
+    @State private var publishingID: UUID?
     @State private var confirmsWrite = false
 
     private var canWriteConfiguration: Bool {
-        let enabled = model.airportSubscriptions.filter { $0.isEnabled && $0.isConfigured }
+        let enabled = model.airportSubscriptions.filter {
+            $0.isEnabled && $0.isConfigured && $0.outputMode == .configuration
+        }
         return !enabled.isEmpty
             && enabled.allSatisfy { model.hasCachedAirportSubscription(id: $0.id) }
             && model.surgeConfigurationTargets.contains(where: \.isEnabled)
@@ -109,6 +112,10 @@ struct AirportSubscriptionsView: View {
                 }
             }
             Button("取消", role: .cancel) { deleteCandidate = nil }
+        } message: {
+            if deleteCandidate?.outputMode == .proxyResource {
+                Text("将先删除 GitHub 中对应的 .proxies 文件；远端删除失败时本地机场不会被移除。")
+            }
         }
         .alert("写入 \(model.surgeConfigurationTargets.filter(\.isEnabled).count) 个配置？", isPresented: $confirmsWrite) {
             Button("取消", role: .cancel) {}
@@ -129,8 +136,16 @@ struct AirportSubscriptionsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                Text(subscription.outputMode.displayName)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 if let date = subscription.lastUpdatedAt {
                     Text("链接更新于 \(date.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                if let date = subscription.lastPublishedAt, subscription.outputMode == .proxyResource {
+                    Text("发布于 \(date.formatted(date: .abbreviated, time: .shortened))")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -158,6 +173,21 @@ struct AirportSubscriptionsView: View {
                 }
             ))
             .labelsHidden()
+            if subscription.outputMode == .proxyResource,
+               let url = model.airportPublishedURL(for: subscription) {
+                URLCopyButton(url: url)
+                Button {
+                    publish(subscription.id)
+                } label: {
+                    if publishingID == subscription.id {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "icloud.and.arrow.up")
+                    }
+                }
+                .help("立即发布 .proxies")
+                .disabled(publishingID != nil || refreshingID != nil)
+            }
             Button {
                 refresh(subscription.id)
             } label: {
@@ -206,6 +236,18 @@ struct AirportSubscriptionsView: View {
             defer { refreshingID = nil }
             do {
                 try await model.refreshAirportSubscriptionForCurrentMode(id: id)
+            } catch {
+                model.presentedError = error.localizedDescription
+            }
+        }
+    }
+
+    private func publish(_ id: UUID) {
+        publishingID = id
+        Task {
+            defer { publishingID = nil }
+            do {
+                try await model.publishAirportSubscriptionForCurrentMode(id: id)
             } catch {
                 model.presentedError = error.localizedDescription
             }
@@ -593,6 +635,7 @@ private struct AirportSubscriptionEditor: View {
     @State private var draft: AirportSubscriptionDraft
     @State private var errorMessage: String?
     @State private var isSaving = false
+    @State private var isPublishing = false
     @State private var isAdvancedRegexExpanded: Bool
 
     init(subscription: AirportSubscription?) {
@@ -608,10 +651,54 @@ private struct AirportSubscriptionEditor: View {
             Form {
                 Section("机场") {
                     TextField("名称", text: $draft.name, prompt: Text("例如 FlowerCloud"))
-                    Toggle("写入 Surge 配置", isOn: $draft.isEnabled)
+                    Toggle("启用机场", isOn: $draft.isEnabled)
                 }
                 Section("订阅") {
                     TextField("订阅链接", text: $draft.sourceURL, prompt: Text("https://…"))
+                }
+                Section("节点输出方式") {
+                    Picker("节点输出方式", selection: $draft.outputMode) {
+                        ForEach(AirportOutputMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.radioGroup)
+                }
+                if draft.outputMode == .configuration {
+                    Section("目标 Surge 配置") {
+                        let targets = model.surgeConfigurationTargets.filter(\.isEnabled)
+                        if targets.isEmpty {
+                            Text("请在机场订阅汇总页添加并启用配置文件。")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(targets) { target in
+                                LabeledContent(target.url.lastPathComponent, value: target.url.path)
+                            }
+                        }
+                    }
+                } else {
+                    Section("GitHub 发布") {
+                        LabeledContent("文件", value: proxyResourcePath ?? "机场名称无效")
+                        if let url = proxyResourceURL {
+                            LabeledContent("发布地址") {
+                                Text(url.absoluteString)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
+                            }
+                            HStack {
+                                URLCopyButton(url: url)
+                                Button("立即发布", systemImage: "icloud.and.arrow.up") {
+                                    publishNow()
+                                }
+                                .disabled(!canPublishImmediately || isPublishing)
+                                if isPublishing { ProgressView().controlSize(.small) }
+                            }
+                        } else {
+                            Label("请先配置并验证 GitHub 与 Cloudflare Worker。", systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 Section("节点筛选") {
                     Toggle("过滤流量、到期等订阅信息节点", isOn: $draft.nodeProcessing.filtersMetadataNodes)
@@ -720,6 +807,33 @@ private struct AirportSubscriptionEditor: View {
             do {
                 try await model.saveAirportSubscriptionForCurrentMode(id: subscription?.id, draft: draft)
                 dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private var proxyResourcePath: String? {
+        try? GitHubResourcePath.airport(named: draft.name)
+    }
+
+    private var proxyResourceURL: URL? {
+        proxyResourcePath.flatMap { model.settings.github.publicURL(repositoryPath: $0) }
+    }
+
+    private var canPublishImmediately: Bool {
+        guard let subscription else { return false }
+        return draft == AirportSubscriptionDraft(subscription: subscription)
+    }
+
+    private func publishNow() {
+        guard let id = subscription?.id else { return }
+        isPublishing = true
+        errorMessage = nil
+        Task {
+            defer { isPublishing = false }
+            do {
+                try await model.publishAirportSubscriptionForCurrentMode(id: id)
             } catch {
                 errorMessage = error.localizedDescription
             }

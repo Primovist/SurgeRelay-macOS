@@ -95,6 +95,10 @@ struct RemoteManagementClient: Sendable {
         _ = try await postAction("api/airports/\(id.uuidString.lowercased())/refresh")
     }
 
+    func publishAirportSubscription(id: UUID) async throws {
+        _ = try await postAction("api/airports/\(id.uuidString.lowercased())/publish")
+    }
+
     func airportSubscriptionPreview(id: UUID) async throws -> String {
         try await getText("api/airports/\(id.uuidString.lowercased())/preview")
     }
@@ -526,8 +530,10 @@ struct RemoteAirportPayload: Codable, Sendable {
     var nodeNameOptimization: AirportNodeNameOptimization?
     var nodeProcessing: AirportNodeProcessingOptions?
     var iconURL: String
+    var outputMode: AirportOutputMode?
     var isEnabled: Bool
     var lastUpdatedAt: Date?
+    var lastPublishedAt: Date?
     var lastError: String?
     var hasCache: Bool
 }
@@ -705,6 +711,7 @@ struct RemoteAirportMutation: Codable, Sendable {
     var nodeNameOptimization: AirportNodeNameOptimization
     var nodeProcessing: AirportNodeProcessingOptions
     var iconURL: String
+    var outputMode: AirportOutputMode
     var isEnabled: Bool
 
     init(draft: AirportSubscriptionDraft) {
@@ -715,6 +722,7 @@ struct RemoteAirportMutation: Codable, Sendable {
         nodeNameOptimization = draft.nodeNameOptimization
         nodeProcessing = draft.nodeProcessing
         iconURL = draft.iconURL
+        outputMode = draft.outputMode
         isEnabled = draft.isEnabled
     }
 }

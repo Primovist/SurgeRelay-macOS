@@ -31,6 +31,74 @@ extension AppModel {
             : "已更新 \(updated.name) 的过滤与显示设置"
     }
 
+    func updateAirportSubscriptionAndPublish(id: UUID, from draft: AirportSubscriptionDraft) async throws {
+        guard let index = airportSubscriptions.firstIndex(where: { $0.id == id }) else { return }
+        let original = airportSubscriptions[index]
+        var updated = original
+        let sourceChanged = original.sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            != draft.sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        apply(draft, to: &updated)
+        try validateAirportSubscription(updated, excluding: id)
+
+        if original.outputMode == .proxyResource, original.lastPublishedAt != nil,
+           updated.outputMode == .configuration {
+            let oldPath = try GitHubResourcePath.airport(named: original.trimmedName)
+            _ = try await githubClient.publishResources(
+                files: [], deletingPaths: [oldPath], settings: settings.github, token: githubToken
+            )
+            updated.lastPublishedAt = nil
+        } else if updated.outputMode == .proxyResource {
+            let sourceData: Data
+            if !sourceChanged, AirportSubscriptionStore.hasCache(for: id) {
+                sourceData = try AirportSubscriptionStore.data(for: id)
+            } else {
+                sourceData = try await downloadAirportSubscriptionData(from: updated.sourceURL)
+            }
+            let newPath = try GitHubResourcePath.airport(named: updated.trimmedName)
+            let content = try AirportSubscriptionParser.proxyResourceContent(
+                from: sourceData,
+                for: updated
+            )
+            var obsoletePaths: [String] = []
+            if original.outputMode == .proxyResource, original.lastPublishedAt != nil,
+               let oldPath = try? GitHubResourcePath.airport(named: original.trimmedName), oldPath != newPath {
+                obsoletePaths.append(oldPath)
+            }
+            _ = try await githubClient.publishResources(
+                files: [PublishFile(name: newPath, data: Data(content.utf8))],
+                deletingPaths: obsoletePaths,
+                settings: settings.github,
+                token: githubToken
+            )
+            updated.lastPublishedAt = .now
+            if sourceChanged || !AirportSubscriptionStore.hasCache(for: id) {
+                try AirportSubscriptionStore.save(sourceData, for: id)
+                updated.lastUpdatedAt = .now
+            }
+        }
+
+        if sourceChanged {
+            if updated.outputMode == .configuration {
+                updated.lastUpdatedAt = nil
+                AirportSubscriptionStore.remove(for: id)
+            }
+        }
+        updated.lastError = nil
+        airportSubscriptions[index] = updated
+        invalidateAirportConfigurationPreview()
+        do {
+            try persistAirportSubscriptions()
+        } catch {
+            airportSubscriptions[index] = original
+            throw error
+        }
+        statusMessage = sourceChanged
+            ? "已更新 \(updated.name) 的订阅链接"
+            : updated.outputMode == .proxyResource && updated.lastPublishedAt != nil
+                ? "已更新并发布 \(updated.name)"
+                : "已更新 \(updated.name) 的过滤与显示设置"
+    }
+
     func removeAirportSubscription(id: UUID) {
         airportSubscriptions.removeAll { $0.id == id }
         invalidateAirportConfigurationPreview()
@@ -47,33 +115,34 @@ extension AppModel {
     }
 
     func refreshAirportSubscription(id: UUID) async throws {
-        guard let index = airportSubscriptions.firstIndex(where: { $0.id == id }),
-              let url = URL(string: airportSubscriptions[index].sourceURL) else {
+        guard let index = airportSubscriptions.firstIndex(where: { $0.id == id }) else {
             throw RelayError.invalidOutput("机场订阅地址无效。")
         }
         do {
-            var request = URLRequest(
-                url: url,
-                cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
-                timeoutInterval: 30
-            )
-            request.timeoutInterval = 30
-            request.setValue("Surge Relay", forHTTPHeaderField: "User-Agent")
-            request.setValue("no-cache, no-store", forHTTPHeaderField: "Cache-Control")
-            request.setValue("no-cache", forHTTPHeaderField: "Pragma")
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                throw RelayError.invalidOutput("机场订阅返回 HTTP \(http.statusCode)。")
-            }
-            guard !data.isEmpty else { throw RelayError.invalidOutput("机场订阅内容为空。") }
+            let data = try await downloadAirportSubscriptionData(from: airportSubscriptions[index].sourceURL)
             _ = try AirportSubscriptionParser.proxyEntries(from: data)
+            let subscription = airportSubscriptions[index]
+            if subscription.outputMode == .proxyResource {
+                let path = try GitHubResourcePath.airport(named: subscription.trimmedName)
+                let content = try AirportSubscriptionParser.proxyResourceContent(from: data, for: subscription)
+                _ = try await githubClient.publishResources(
+                    files: [PublishFile(name: path, data: Data(content.utf8))],
+                    settings: settings.github,
+                    token: githubToken
+                )
+            }
             try AirportSubscriptionStore.save(data, for: id)
             invalidateAirportConfigurationPreview()
             guard let currentIndex = airportSubscriptions.firstIndex(where: { $0.id == id }) else { return }
             airportSubscriptions[currentIndex].lastUpdatedAt = .now
+            if airportSubscriptions[currentIndex].outputMode == .proxyResource {
+                airportSubscriptions[currentIndex].lastPublishedAt = .now
+            }
             airportSubscriptions[currentIndex].lastError = nil
             try persistAirportSubscriptions()
-            statusMessage = "已刷新 \(airportSubscriptions[currentIndex].name) 的预览"
+            statusMessage = airportSubscriptions[currentIndex].outputMode == .proxyResource
+                ? "已刷新并发布 \(airportSubscriptions[currentIndex].name)"
+                : "已刷新 \(airportSubscriptions[currentIndex].name) 的预览"
         } catch {
             if let currentIndex = airportSubscriptions.firstIndex(where: { $0.id == id }) {
                 airportSubscriptions[currentIndex].lastError = error.localizedDescription
@@ -81,6 +150,26 @@ extension AppModel {
             }
             throw error
         }
+    }
+
+    private func downloadAirportSubscriptionData(from sourceURL: String) async throws -> Data {
+        guard let url = URL(string: sourceURL) else {
+            throw RelayError.invalidOutput("机场订阅地址无效。")
+        }
+        var request = URLRequest(
+            url: url,
+            cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
+            timeoutInterval: 30
+        )
+        request.setValue("Surge Relay", forHTTPHeaderField: "User-Agent")
+        request.setValue("no-cache, no-store", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw RelayError.invalidOutput("机场订阅返回 HTTP \(http.statusCode)。")
+        }
+        guard !data.isEmpty else { throw RelayError.invalidOutput("机场订阅内容为空。") }
+        return data
     }
 
     func cachedAirportSubscriptionContent(id: UUID) throws -> String {
@@ -98,7 +187,7 @@ extension AppModel {
     func saveAirportSubscriptionForCurrentMode(id: UUID?, draft: AirportSubscriptionDraft) async throws {
         guard isClientMode else {
             if let id {
-                try updateAirportSubscription(id: id, from: draft)
+                try await updateAirportSubscriptionAndPublish(id: id, from: draft)
             } else {
                 try addAirportSubscription(from: draft)
             }
@@ -115,6 +204,13 @@ extension AppModel {
 
     func removeAirportSubscriptionForCurrentMode(id: UUID) async throws {
         guard isClientMode else {
+            if let subscription = airportSubscriptions.first(where: { $0.id == id }),
+               subscription.outputMode == .proxyResource, subscription.lastPublishedAt != nil {
+                let path = try GitHubResourcePath.airport(named: subscription.trimmedName)
+                _ = try await githubClient.publishResources(
+                    files: [], deletingPaths: [path], settings: settings.github, token: githubToken
+                )
+            }
             removeAirportSubscription(id: id)
             return
         }
@@ -141,6 +237,44 @@ extension AppModel {
         let client = try operationalRemoteClient()
         try await client.refreshAirportSubscription(id: id)
         try await synchronizeRemoteAirportState(using: client)
+    }
+
+    func publishAirportSubscriptionForCurrentMode(id: UUID) async throws {
+        guard isClientMode else {
+            guard let subscription = airportSubscriptions.first(where: { $0.id == id }),
+                  subscription.outputMode == .proxyResource else {
+                throw RelayError.invalidOutput("该机场未设置为 .proxies 发布模式。")
+            }
+            guard AirportSubscriptionStore.hasCache(for: id) else {
+                try await refreshAirportSubscription(id: id)
+                return
+            }
+            let path = try GitHubResourcePath.airport(named: subscription.trimmedName)
+            let content = try AirportSubscriptionParser.proxyResourceContent(
+                from: AirportSubscriptionStore.data(for: id), for: subscription
+            )
+            _ = try await githubClient.publishResources(
+                files: [PublishFile(name: path, data: Data(content.utf8))],
+                settings: settings.github,
+                token: githubToken
+            )
+            if let index = airportSubscriptions.firstIndex(where: { $0.id == id }) {
+                airportSubscriptions[index].lastPublishedAt = .now
+                airportSubscriptions[index].lastError = nil
+            }
+            try persistAirportSubscriptions()
+            statusMessage = "已发布 \(subscription.name)"
+            return
+        }
+        let client = try operationalRemoteClient()
+        try await client.publishAirportSubscription(id: id)
+        try await synchronizeRemoteAirportState(using: client)
+    }
+
+    func airportPublishedURL(for subscription: AirportSubscription) -> URL? {
+        guard subscription.outputMode == .proxyResource,
+              let path = try? GitHubResourcePath.airport(named: subscription.trimmedName) else { return nil }
+        return settings.github.publicURL(repositoryPath: path)
     }
 
     func airportSubscriptionPreviewForCurrentMode(id: UUID, refresh: Bool) async throws -> String {
@@ -331,6 +465,7 @@ extension AppModel {
         subscription.nodeNameOptimization = draft.nodeNameOptimization
         subscription.nodeProcessing = draft.nodeProcessing
         subscription.iconURL = draft.iconURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        subscription.outputMode = draft.outputMode
         subscription.isEnabled = draft.isEnabled
     }
 
@@ -341,8 +476,11 @@ extension AppModel {
         guard !subscription.trimmedName.contains(where: { $0 == "\n" || $0 == "\r" || $0 == "=" || $0 == "," }) else {
             throw RelayError.invalidOutput("机场名称不能包含逗号、等号或换行。")
         }
+        if subscription.outputMode == .proxyResource {
+            _ = try GitHubResourcePath.airport(named: subscription.trimmedName)
+        }
         guard !airportSubscriptions.contains(where: {
-            $0.id != id && $0.trimmedName.caseInsensitiveCompare(subscription.trimmedName) == .orderedSame
+            $0.id != id && GitHubResourcePath.airportNamesConflict($0.trimmedName, subscription.trimmedName)
         }) else {
             throw RelayError.invalidOutput("已存在同名机场。")
         }
@@ -394,7 +532,9 @@ extension AppModel {
     }
 
     private func generatedAirportConfiguration() throws -> (proxyBlock: String, groupBlock: String, preview: String) {
-        let subscriptions = airportSubscriptions.filter { $0.isEnabled && $0.isConfigured }
+        let subscriptions = airportSubscriptions.filter {
+            $0.isEnabled && $0.isConfigured && $0.outputMode == .configuration
+        }
         guard !subscriptions.isEmpty else { throw RelayError.invalidOutput("没有已启用的机场。") }
         var proxyLines = ["# >>> Surge Relay 机场代理"]
         var groupLines = ["# >>> Surge Relay 机场分组"]

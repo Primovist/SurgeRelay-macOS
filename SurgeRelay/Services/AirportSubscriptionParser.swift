@@ -24,6 +24,18 @@ struct AirportNodeProcessingResult: Equatable, Sendable {
 }
 
 enum AirportSubscriptionParser {
+    static func proxyResourceContent(from data: Data, for subscription: AirportSubscription) throws -> String {
+        let entries = try proxyEntries(from: data)
+        var usedNames = Set<String>()
+        let result = process(entries, for: subscription, reserving: &usedNames)
+        guard !result.included.isEmpty else {
+            throw RelayError.invalidOutput("\(subscription.name) 的节点在过滤后为空。")
+        }
+        return result.included
+            .map { "\($0.name) = \($0.definition)" }
+            .joined(separator: "\n") + "\n"
+    }
+
     static func proxyEntries(from data: Data) throws -> [AirportProxyEntry] {
         guard let initial = decodedText(data) else {
             throw RelayError.invalidOutput("订阅内容不是可识别的文本或 Base64 文本。")

@@ -1,0 +1,128 @@
+name: Release arm64
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - appcast.xml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: surge-relay-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+      SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate and validate version
+        id: version
+        run: |
+          version=$(sh Scripts/release-version.sh)
+          echo "$version" | grep -Eq '^[0-9]{12}$' || { echo "Invalid version: $version" >&2; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null 2>&1; then
+            echo "Tag $version already exists. Retry after the next minute." >&2
+            exit 1
+          fi
+          if gh release view "$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $version already exists. Retry after the next minute." >&2
+            exit 1
+          fi
+          test -n "$SPARKLE_PRIVATE_KEY" || { echo "Missing SPARKLE_PRIVATE_KEY secret" >&2; exit 1; }
+          test -n "$SPARKLE_PUBLIC_ED_KEY" || { echo "Missing SPARKLE_PUBLIC_ED_KEY variable" >&2; exit 1; }
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+      - name: Resolve Swift packages
+        run: xcodebuild -resolvePackageDependencies -project "Surge Relay.xcodeproj" -scheme "Surge Relay"
+      - name: Build and test arm64 Release
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          xcodebuild test \
+            -project "Surge Relay.xcodeproj" \
+            -scheme "Surge Relay" \
+            -configuration Release \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$VERSION" \
+            SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY"
+      - name: Verify bundle and create ZIP
+        id: artifact
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          app="$RUNNER_TEMP/DerivedData/Build/Products/Release/Surge Relay.app"
+          executable="$app/Contents/MacOS/Surge Relay"
+          architectures=$(lipo -archs "$executable")
+          test "$architectures" = "arm64" || { echo "Expected arm64, got: $architectures" >&2; exit 1; }
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$VERSION"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" = "$VERSION"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$app/Contents/Info.plist")" = "https://raw.githubusercontent.com/Primovist/SurgeRelay-macOS/main/appcast.xml"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$app/Contents/Info.plist")" = "$SPARKLE_PUBLIC_ED_KEY"
+          artifact="$GITHUB_WORKSPACE/Surge-Relay-$VERSION-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$artifact"
+          unzip -l "$artifact" | grep -Fq 'Surge Relay.app/Contents/MacOS/Surge Relay'
+          echo "path=$artifact" >> "$GITHUB_OUTPUT"
+      - name: Generate signed Sparkle appcast
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+          ARTIFACT: ${{ steps.artifact.outputs.path }}
+        run: |
+          generator=$(find "$RUNNER_TEMP/DerivedData/SourcePackages" -type f -name generate_appcast -perm -111 -print -quit)
+          test -n "$generator" || { echo "Sparkle generate_appcast was not found" >&2; exit 1; }
+          feed_dir="$RUNNER_TEMP/appcast-current"
+          mkdir -p "$feed_dir"
+          cp "$ARTIFACT" "$feed_dir/"
+          printf '%s\n' "$SPARKLE_PRIVATE_KEY" | "$generator" \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/Primovist/SurgeRelay-macOS/releases/download/$VERSION/" \
+            "$feed_dir"
+          ruby Scripts/merge-appcast.rb "$feed_dir/appcast.xml" appcast.xml appcast.xml 10
+          xmllint --noout appcast.xml
+          grep -Fq "sparkle:version=\"$VERSION\"" appcast.xml
+          grep -Fq "sparkle:shortVersionString=\"$VERSION\"" appcast.xml
+          grep -Fq "releases/download/$VERSION/Surge-Relay-$VERSION-arm64.zip" appcast.xml
+          grep -Eq 'sparkle:edSignature="[^"]+"' appcast.xml
+      - name: Create tag and GitHub Release
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+          ARTIFACT: ${{ steps.artifact.outputs.path }}
+        run: |
+          gh release create "$VERSION" "$ARTIFACT" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Surge Relay $VERSION" \
+            --generate-notes
+          curl --fail --location --retry 5 \
+            --output "$RUNNER_TEMP/release-check.zip" \
+            "https://github.com/Primovist/SurgeRelay-macOS/releases/download/$VERSION/Surge-Relay-$VERSION-arm64.zip"
+          cmp "$ARTIFACT" "$RUNNER_TEMP/release-check.zip"
+      - name: Commit appcast.xml to main
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add appcast.xml
+          git commit -m "Update appcast for $VERSION"
+          git push origin HEAD:main
+          for attempt in 1 2 3 4 5; do
+            if curl --fail --silent --show-error \
+              "https://raw.githubusercontent.com/Primovist/SurgeRelay-macOS/main/appcast.xml?version=$VERSION" \
+              | grep -Fq "sparkle:version=\"$VERSION\""; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Published appcast is not yet serving version $VERSION" >&2
+          exit 1

@@ -104,6 +104,67 @@ actor GitHubClient {
         guard !token.isEmpty else { throw RelayError.githubTokenMissing }
         guard !files.isEmpty else { throw RelayError.noFilesToPublish }
 
+        try await validateDestination(settings: settings, token: token)
+
+        let managedPaths = files.map(\.name).sorted()
+        let manifestData = try JSONEncoder().encode(PublishManifest(version: 1, paths: managedPaths))
+        let publishFiles = files + [PublishFile(name: manifestFileName, data: manifestData)]
+
+        var moduleSettings = settings
+        moduleSettings.directory = GitHubResourcePath.modulesDirectory
+
+        var repositoryPaths = Set<String>()
+        for file in publishFiles {
+            let path = repositoryPath(for: file.name, settings: moduleSettings)
+            guard GitHubResourcePath.validated(path) != nil,
+                  repositoryPaths.insert(path).inserted else {
+                throw RelayError.invalidOutput("GitHub 发布列表包含重复路径：\(path)")
+            }
+        }
+
+        return try await performPublish(
+            files: publishFiles,
+            obsoleteFileNames: obsoleteFileNames,
+            settings: moduleSettings,
+            token: token,
+            includesManagedSnapshot: true
+        )
+    }
+
+    /// Applies exact repository-root-relative path changes without replacing
+    /// another resource family's manifest. This is used by airport resources,
+    /// while module publishing keeps its existing full-snapshot behavior.
+    func publishResources(
+        files: [PublishFile],
+        deletingPaths: [String] = [],
+        settings: GitHubSettings,
+        token: String
+    ) async throws -> PublishReport {
+        guard settings.isConfigured else { throw RelayError.githubNotConfigured }
+        guard !token.isEmpty else { throw RelayError.githubTokenMissing }
+        guard !files.isEmpty || !deletingPaths.isEmpty else { throw RelayError.noFilesToPublish }
+        try await validateDestination(settings: settings, token: token)
+
+        let allPaths = files.flatMap { [$0.name] + $0.legacyNames } + deletingPaths
+        guard allPaths.allSatisfy({ GitHubResourcePath.validated($0) != nil }) else {
+            throw RelayError.invalidOutput("GitHub 发布路径无效。")
+        }
+        guard Set(files.map(\.name)).count == files.count else {
+            throw RelayError.invalidOutput("GitHub 发布列表包含重复路径。")
+        }
+
+        var rootSettings = settings
+        rootSettings.directory = ""
+        return try await performPublish(
+            files: files,
+            obsoleteFileNames: deletingPaths,
+            settings: rootSettings,
+            token: token,
+            includesManagedSnapshot: false
+        )
+    }
+
+    private func validateDestination(settings: GitHubSettings, token: String) async throws {
         // This check belongs at the upload boundary so automatic publishing and
         // future callers cannot bypass the private-repository policy.
         let destinationKey = "\(settings.owner.lowercased())/\(settings.repository.lowercased())"
@@ -116,27 +177,25 @@ actor GitHubClient {
         guard settings.hasValidCloudflarePublicBaseURL else {
             throw RelayError.cloudflareNotConfigured
         }
+    }
 
-        let managedPaths = files.map(\.name).sorted()
-        let manifestData = try JSONEncoder().encode(PublishManifest(version: 1, paths: managedPaths))
-        let publishFiles = files + [PublishFile(name: manifestFileName, data: manifestData)]
-
-        var repositoryPaths = Set<String>()
-        for file in publishFiles {
-            let path = repositoryPath(for: file.name, settings: settings)
-            guard repositoryPaths.insert(path).inserted else {
-                throw RelayError.invalidOutput("GitHub 发布列表包含重复路径：\(path)")
-            }
-        }
+    private func performPublish(
+        files: [PublishFile],
+        obsoleteFileNames: [String],
+        settings: GitHubSettings,
+        token: String,
+        includesManagedSnapshot: Bool
+    ) async throws -> PublishReport {
 
         let maximumAttempts = 5
         for attempt in 0..<maximumAttempts {
             do {
                 return try await publishAttempt(
-                    files: publishFiles,
+                    files: files,
                     obsoleteFileNames: obsoleteFileNames,
                     settings: settings,
-                    token: token
+                    token: token,
+                    includesManagedSnapshot: includesManagedSnapshot
                 )
             } catch {
                 guard attempt < maximumAttempts - 1, isRetryablePublishError(error) else {
@@ -169,7 +228,8 @@ actor GitHubClient {
         files: [PublishFile],
         obsoleteFileNames: [String],
         settings: GitHubSettings,
-        token: String
+        token: String,
+        includesManagedSnapshot: Bool
     ) async throws -> PublishReport {
         let branch = encodedPathComponent(settings.branch)
         let reference: ReferenceResponse = try await requestJSON(
@@ -195,11 +255,11 @@ actor GitHubClient {
                 .filter { $0.type == "blob" }
                 .map { ($0.path, $0.sha) }
         )
-        let previousManagedPaths = try await managedPaths(
-            from: existingBlobSHAs,
-            settings: settings,
-            token: token
-        )
+        let previousManagedPaths = if includesManagedSnapshot {
+            try await managedPaths(from: existingBlobSHAs, settings: settings, token: token)
+        } else {
+            Set<String>()
+        }
         let desiredPaths = Set(files.map { repositoryPath(for: $0.name, settings: settings) })
         let changedFiles = files.filter { file in
             existingBlobSHAs[repositoryPath(for: file.name, settings: settings)] != file.data.gitBlobSHA1

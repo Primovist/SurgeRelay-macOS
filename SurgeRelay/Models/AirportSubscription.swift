@@ -1,5 +1,19 @@
 import Foundation
 
+enum AirportOutputMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case configuration
+    case proxyResource
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .configuration: "写入 Surge 配置"
+        case .proxyResource: "发布为 .proxies"
+        }
+    }
+}
+
 struct AirportNodeNameOptimization: Codable, Equatable, Sendable {
     static let defaultRemovalTerms = "IEPL, IPEL, 专线"
 
@@ -132,8 +146,10 @@ struct AirportSubscription: Codable, Equatable, Identifiable, Sendable {
     var nodeNameOptimization = AirportNodeNameOptimization()
     var nodeProcessing = AirportNodeProcessingOptions()
     var iconURL = ""
+    var outputMode = AirportOutputMode.configuration
     var isEnabled = true
     var lastUpdatedAt: Date?
+    var lastPublishedAt: Date?
     var lastError: String?
 
     var trimmedName: String {
@@ -156,8 +172,10 @@ struct AirportSubscription: Codable, Equatable, Identifiable, Sendable {
         nodeNameOptimization: AirportNodeNameOptimization = AirportNodeNameOptimization(),
         nodeProcessing: AirportNodeProcessingOptions = AirportNodeProcessingOptions(),
         iconURL: String = "",
+        outputMode: AirportOutputMode = .configuration,
         isEnabled: Bool = true,
         lastUpdatedAt: Date? = nil,
+        lastPublishedAt: Date? = nil,
         lastError: String? = nil
     ) {
         self.id = id
@@ -168,14 +186,16 @@ struct AirportSubscription: Codable, Equatable, Identifiable, Sendable {
         self.nodeNameOptimization = nodeNameOptimization
         self.nodeProcessing = nodeProcessing
         self.iconURL = iconURL
+        self.outputMode = outputMode
         self.isEnabled = isEnabled
         self.lastUpdatedAt = lastUpdatedAt
+        self.lastPublishedAt = lastPublishedAt
         self.lastError = lastError
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, sourceURL, policyRegexFilter, nodeNameTemplate, nodeNameOptimization, nodeProcessing, iconURL
-        case isEnabled, lastUpdatedAt, lastError
+        case outputMode, isEnabled, lastUpdatedAt, lastPublishedAt, lastError
     }
 
     init(from decoder: Decoder) throws {
@@ -194,8 +214,10 @@ struct AirportSubscription: Codable, Equatable, Identifiable, Sendable {
             forKey: .nodeProcessing
         ) ?? AirportNodeProcessingOptions()
         iconURL = try container.decodeIfPresent(String.self, forKey: .iconURL) ?? ""
+        outputMode = try container.decodeIfPresent(AirportOutputMode.self, forKey: .outputMode) ?? .configuration
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
         lastUpdatedAt = try container.decodeIfPresent(Date.self, forKey: .lastUpdatedAt)
+        lastPublishedAt = try container.decodeIfPresent(Date.self, forKey: .lastPublishedAt)
         lastError = try container.decodeIfPresent(String.self, forKey: .lastError)
     }
 }
@@ -208,6 +230,7 @@ struct AirportSubscriptionDraft: Equatable {
     var nodeNameOptimization = AirportNodeNameOptimization()
     var nodeProcessing = AirportNodeProcessingOptions()
     var iconURL = ""
+    var outputMode = AirportOutputMode.configuration
     var isEnabled = true
 
     init() {}
@@ -220,6 +243,7 @@ struct AirportSubscriptionDraft: Equatable {
         nodeNameOptimization = subscription.nodeNameOptimization
         nodeProcessing = subscription.nodeProcessing
         iconURL = subscription.iconURL
+        outputMode = subscription.outputMode
         isEnabled = subscription.isEnabled
     }
 }

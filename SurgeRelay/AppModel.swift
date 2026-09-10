@@ -41,7 +41,7 @@ final class AppModel {
     @ObservationIgnored private let sourceRevisionService = SourceRevisionService()
     @ObservationIgnored private let upstreamService = ScriptHubUpstreamService()
     @ObservationIgnored private let engineStore = EngineStore()
-    @ObservationIgnored private let githubClient = GitHubClient()
+    @ObservationIgnored let githubClient = GitHubClient()
     @ObservationIgnored private let fileStore = ModuleFileStore()
     @ObservationIgnored private let iconStore = ModuleIconStore()
     @ObservationIgnored private let processingWorker = ModuleProcessingWorker()
@@ -110,7 +110,7 @@ final class AppModel {
             loadedSettings.github.branch = "main"
             migrated = true
         }
-        if loadedSettings.github.directory.isEmpty {
+        if loadedSettings.github.directory != GitHubResourcePath.modulesDirectory {
             loadedSettings.github.directory = "modules"
             migrated = true
         }
@@ -359,7 +359,7 @@ final class AppModel {
         if loadedSettings.github.owner.isEmpty { loadedSettings.github.owner = "EEliberto" }
         if loadedSettings.github.repository.isEmpty { loadedSettings.github.repository = "Surge-Relay" }
         if loadedSettings.github.branch.isEmpty { loadedSettings.github.branch = "main" }
-        if loadedSettings.github.directory.isEmpty { loadedSettings.github.directory = "modules" }
+        loadedSettings.github.directory = GitHubResourcePath.modulesDirectory
         settings = loadedSettings
         modules = Self.normalizedModuleNaming(
             PersistenceStore.loadModules(),
