@@ -43,11 +43,24 @@ jobs:
           echo "value=$version" >> "$GITHUB_OUTPUT"
       - name: Resolve Swift packages
         run: xcodebuild -resolvePackageDependencies -project "Surge Relay.xcodeproj" -scheme "Surge Relay"
-      - name: Build and test arm64 Release
+      - name: Test arm64
         env:
           VERSION: ${{ steps.version.outputs.value }}
         run: |
           xcodebuild test \
+            -project "Surge Relay.xcodeproj" \
+            -scheme "Surge Relay" \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/TestDerivedData" \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$VERSION" \
+            SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY"
+      - name: Build arm64 Release
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          xcodebuild build \
             -project "Surge Relay.xcodeproj" \
             -scheme "Surge Relay" \
             -configuration Release \
