@@ -1,38 +1,61 @@
 {
-  "fill" : {
-    "automatic-gradient" : "extended-gray:1.00000,1.00000"
-  },
+  "fill" : "none",
   "groups" : [
     {
       "layers" : [
         {
           "blend-mode" : "normal",
-          "fill" : {
-            "linear-gradient" : [
-              "display-p3:0.24219,0.21863,0.96875,1.00000",
-              "display-p3:0.39526,0.74268,0.97217,1.00000"
-            ]
-          },
-          "glass" : true,
-          "hidden" : false,
-          "image-name" : "repeat 2.png",
-          "name" : "repeat 2",
+          "glass" : false,
+          "hidden-specializations" : [
+            {
+              "value" : false
+            },
+            {
+              "appearance" : "dark",
+              "value" : true
+            }
+          ],
+          "image-name" : "brand-icon.png",
+          "name" : "Surge Relay Light",
           "position" : {
             "scale" : 1,
             "translation-in-points" : [
               0,
-              7.5
+              0
+            ]
+          }
+        },
+        {
+          "blend-mode" : "normal",
+          "glass" : false,
+          "hidden-specializations" : [
+            {
+              "value" : true
+            },
+            {
+              "appearance" : "dark",
+              "value" : false
+            }
+          ],
+          "image-name" : "brand-icon-dark.png",
+          "name" : "Surge Relay Dark",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              0
             ]
           }
         }
       ],
       "shadow" : {
-        "kind" : "neutral",
-        "opacity" : 0.5
+        "kind" : "none",
+        "opacity" : 0
       },
+      "specular" : false,
       "translucency" : {
-        "enabled" : true,
-        "value" : 0.5
+        "enabled" : false,
+        "value" : 0
       }
     }
   ],
