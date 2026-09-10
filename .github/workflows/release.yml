@@ -30,9 +30,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ------------------------------------------------------------
-      # 1. Generate release version
-      # ------------------------------------------------------------
       - name: Generate and validate version
         id: version
         shell: bash
@@ -70,9 +67,6 @@ jobs:
           echo "Release version: $version"
           echo "value=$version" >> "$GITHUB_OUTPUT"
 
-      # ------------------------------------------------------------
-      # 2. Resolve Swift Package Manager dependencies
-      # ------------------------------------------------------------
       - name: Resolve Swift packages
         run: |
           set -euo pipefail
@@ -82,9 +76,6 @@ jobs:
             -project "Surge Relay.xcodeproj" \
             -scheme "Surge Relay"
 
-      # ------------------------------------------------------------
-      # 3. Run arm64 tests
-      # ------------------------------------------------------------
       - name: Test arm64
         env:
           VERSION: ${{ steps.version.outputs.value }}
@@ -104,9 +95,6 @@ jobs:
             CURRENT_PROJECT_VERSION="$VERSION" \
             SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY"
 
-      # ------------------------------------------------------------
-      # 4. Build arm64 Release
-      # ------------------------------------------------------------
       - name: Build arm64 Release
         env:
           VERSION: ${{ steps.version.outputs.value }}
@@ -126,9 +114,6 @@ jobs:
             CURRENT_PROJECT_VERSION="$VERSION" \
             SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY"
 
-      # ------------------------------------------------------------
-      # 5. Verify application and create ZIP
-      # ------------------------------------------------------------
       - name: Verify bundle and create ZIP
         id: artifact
         env:
@@ -207,11 +192,9 @@ jobs:
             exit 1
           }
 
-          #
           # Sparkle rejects completely unsigned archives.
-          # Until Developer ID signing/notarization is configured,
-          # apply a valid ad-hoc signature to the complete app bundle.
-          #
+          # Until a Developer ID identity is configured,
+          # apply a valid ad-hoc signature to the full bundle.
           codesign \
             --force \
             --deep \
@@ -250,9 +233,6 @@ jobs:
 
           echo "path=$artifact" >> "$GITHUB_OUTPUT"
 
-      # ------------------------------------------------------------
-      # 6. Generate Sparkle appcast
-      # ------------------------------------------------------------
       - name: Generate signed Sparkle appcast
         env:
           VERSION: ${{ steps.version.outputs.value }}
@@ -315,7 +295,6 @@ jobs:
           echo
           echo "========================================"
 
-          # Validate XML
           echo "[CHECK] XML syntax"
 
           xmllint --noout appcast.xml || {
@@ -325,22 +304,14 @@ jobs:
 
           echo "OK: XML syntax"
 
-          # Sparkle supports both:
-          #
-          # <sparkle:version>123</sparkle:version>
-          #
-          # and older:
-          #
-          # sparkle:version="123"
-          #
           echo "[CHECK] Sparkle version"
 
           if grep -Fq "<sparkle:version>$VERSION</sparkle:version>" appcast.xml; then
             echo "OK: sparkle:version element = $VERSION"
-
           elif grep -Fq "sparkle:version=\"$VERSION\"" appcast.xml; then
-            echo "OK: sparkle:version attribute = $VERSION"
-
+            echo "OK: sparkle:version double-quoted attribute = $VERSION"
+          elif grep -Fq "sparkle:version='$VERSION'" appcast.xml; then
+            echo "OK: sparkle:version single-quoted attribute = $VERSION"
           else
             echo "ERROR: Sparkle version $VERSION not found" >&2
             grep -n 'sparkle:version' appcast.xml || true
@@ -351,10 +322,10 @@ jobs:
 
           if grep -Fq "<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>" appcast.xml; then
             echo "OK: sparkle:shortVersionString element = $VERSION"
-
           elif grep -Fq "sparkle:shortVersionString=\"$VERSION\"" appcast.xml; then
-            echo "OK: sparkle:shortVersionString attribute = $VERSION"
-
+            echo "OK: sparkle:shortVersionString double-quoted attribute = $VERSION"
+          elif grep -Fq "sparkle:shortVersionString='$VERSION'" appcast.xml; then
+            echo "OK: sparkle:shortVersionString single-quoted attribute = $VERSION"
           else
             echo "ERROR: Sparkle short version $VERSION not found" >&2
             grep -n 'shortVersionString' appcast.xml || true
@@ -375,22 +346,24 @@ jobs:
 
           echo "[CHECK] Sparkle EdDSA signature"
 
-          grep -Eq \
-            'sparkle:edSignature="[^"]+"' \
-            appcast.xml || {
-              echo "ERROR: sparkle:edSignature not found" >&2
-              grep -n 'edSignature' appcast.xml || true
-              exit 1
-            }
+          ed_signature="$(
+            xmllint \
+              --xpath \
+              'string(//*[local-name()="enclosure"]/@*[local-name()="edSignature"])' \
+              appcast.xml
+          )"
+
+          test -n "$ed_signature" || {
+            echo "ERROR: sparkle:edSignature not found" >&2
+            grep -n 'edSignature' appcast.xml || true
+            exit 1
+          }
 
           echo "OK: EdDSA signature"
 
           echo
           echo "Sparkle appcast validation passed for $VERSION"
 
-      # ------------------------------------------------------------
-      # 7. Create GitHub Release
-      # ------------------------------------------------------------
       - name: Create tag and GitHub Release
         env:
           VERSION: ${{ steps.version.outputs.value }}
@@ -421,9 +394,6 @@ jobs:
 
           echo "Release artifact verified."
 
-      # ------------------------------------------------------------
-      # 8. Commit appcast.xml
-      # ------------------------------------------------------------
       - name: Commit appcast.xml to main
         env:
           VERSION: ${{ steps.version.outputs.value }}
@@ -457,14 +427,18 @@ jobs:
 
             if printf '%s\n' "$published" |
               grep -Fq "<sparkle:version>$VERSION</sparkle:version>"; then
-
               echo "Published appcast contains version $VERSION"
               exit 0
             fi
 
             if printf '%s\n' "$published" |
               grep -Fq "sparkle:version=\"$VERSION\""; then
+              echo "Published appcast contains version $VERSION"
+              exit 0
+            fi
 
+            if printf '%s\n' "$published" |
+              grep -Fq "sparkle:version='$VERSION'"; then
               echo "Published appcast contains version $VERSION"
               exit 0
             fi
