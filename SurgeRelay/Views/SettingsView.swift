@@ -685,7 +685,7 @@ struct SettingsView: View {
         Form {
             Section {
                 VStack(spacing: 10) {
-                    Image(nsImage: NSApplication.shared.applicationIconImage)
+                    Image("RelayBrandIcon")
                         .resizable()
                         .interpolation(.high)
                         .antialiased(true)

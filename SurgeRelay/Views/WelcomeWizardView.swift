@@ -90,7 +90,7 @@ struct WelcomeWizardView: View {
 
     private var hero: some View {
         VStack(spacing: 11) {
-            Image(nsImage: NSApplication.shared.applicationIconImage)
+            Image("RelayBrandIcon")
                 .resizable()
                 .scaledToFit()
                 .frame(width: 76, height: 76)
