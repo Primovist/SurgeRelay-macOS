@@ -61,6 +61,33 @@ final class SurgeRelayTests: XCTestCase {
         XCTAssertFalse(RefreshPolicy.isDue(lastUpdatedAt: nil, intervalMinutes: 0, now: now))
     }
 
+    func testScriptHubEngineUpdateForcesEveryModuleThroughConversion() {
+        XCTAssertTrue(ModuleSynchronizationPolicy.requiresConversion(
+            nativeModule: false,
+            cachedEngineRevision: "old",
+            currentEngineRevision: "new",
+            forceReconversion: false
+        ))
+        XCTAssertFalse(ModuleSynchronizationPolicy.requiresConversion(
+            nativeModule: true,
+            cachedEngineRevision: nil,
+            currentEngineRevision: "new",
+            forceReconversion: false
+        ))
+        XCTAssertTrue(ModuleSynchronizationPolicy.requiresConversion(
+            nativeModule: true,
+            cachedEngineRevision: nil,
+            currentEngineRevision: "new",
+            forceReconversion: true
+        ))
+        XCTAssertTrue(ModuleSynchronizationPolicy.requiresConversion(
+            nativeModule: false,
+            cachedEngineRevision: "new",
+            currentEngineRevision: "new",
+            forceReconversion: true
+        ))
+    }
+
     func testScriptHubConversionURLPreservesOriginalAddress() async throws {
         let module = RelayModule(
             name: "Test",

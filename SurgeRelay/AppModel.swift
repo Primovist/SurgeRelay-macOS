@@ -878,14 +878,17 @@ final class AppModel {
         statusMessage = "已删除 \(module.name)，总模块已重新合并"
     }
 
-    func updateAll() async {
+    func updateAll(forceReconversion: Bool = false) async {
         if isClientMode {
             await runRemoteUpdateAll()
             return
         }
         pendingModuleUpdateIDs.removeAll()
         automaticUpdateTask?.cancel()
-        await runSynchronization(limitingTo: nil)
+        await runSynchronization(
+            limitingTo: nil,
+            forceReconversion: forceReconversion
+        )
     }
 
     func updateModules(ids: [UUID]) async {
@@ -898,7 +901,11 @@ final class AppModel {
         await runSynchronization(limitingTo: Set(uniqueIDs))
     }
 
-    private func runSynchronization(limitingTo moduleIDs: Set<UUID>?) async {
+    private func runSynchronization(
+        limitingTo moduleIDs: Set<UUID>?,
+        forceReconversion: Bool = false,
+        refreshEngine: Bool = true
+    ) async {
         synchronizationTask?.cancel()
         combinedRebuildTask?.cancel()
         automaticPublishTask?.cancel()
@@ -912,13 +919,21 @@ final class AppModel {
                 try? await Task.sleep(for: .milliseconds(100))
             }
             guard !Task.isCancelled, self.synchronizationRequestID == requestID else { return }
-            await self.performSynchronization(limitingTo: moduleIDs)
+            await self.performSynchronization(
+                limitingTo: moduleIDs,
+                forceReconversion: forceReconversion,
+                refreshEngine: refreshEngine
+            )
         }
         synchronizationTask = task
         await task.value
     }
 
-    private func performSynchronization(limitingTo moduleIDs: Set<UUID>? = nil) async {
+    private func performSynchronization(
+        limitingTo moduleIDs: Set<UUID>? = nil,
+        forceReconversion: Bool = false,
+        refreshEngine: Bool = true
+    ) async {
         let synchronizationModules = modules.filter {
             shouldSynchronizeModule($0) && (moduleIDs?.contains($0.id) ?? true)
         }
@@ -942,9 +957,11 @@ final class AppModel {
         }
 
         let missingEngine = !(await engineStore.hasScript(named: "Rewrite-Parser.js"))
-        if settings.automaticallyUpdateScriptHub || missingEngine {
-            await refreshScriptHubInternal(updatesStatus: false)
+        var engineUpdated = false
+        if refreshEngine && (settings.automaticallyUpdateScriptHub || missingEngine) {
+            engineUpdated = await refreshScriptHubInternal(updatesStatus: false)
         }
+        let shouldForceReconversion = forceReconversion || engineUpdated
         guard !Task.isCancelled else {
             return
         }
@@ -965,14 +982,19 @@ final class AppModel {
                 let hasCache = await fileStore.hasComponent(id: module.id)
                 let sourceURL = URL(string: module.sourceURL)
                 let nativeModule = sourceURL.map { module.sourceFormat.isNativeSurgeModule(for: $0) } ?? false
-                let engineChanged = !nativeModule && module.conversionEngineRevision != upstreamState.revision
+                let conversionRequired = ModuleSynchronizationPolicy.requiresConversion(
+                    nativeModule: nativeModule,
+                    cachedEngineRevision: module.conversionEngineRevision,
+                    currentEngineRevision: upstreamState.revision,
+                    forceReconversion: shouldForceReconversion
+                )
                 if hasCache {
                     do {
                         let revision = try await sourceRevisionService.check(module)
                         switch revision {
                         case let .unchanged(snapshot):
                             revisionSnapshot = snapshot
-                            if !engineChanged {
+                            if !conversionRequired {
                                 module.sourceETag = snapshot.etag
                                 module.sourceLastModified = snapshot.lastModified
                                 module.sourceContentHash = snapshot.contentHash
@@ -1318,11 +1340,20 @@ final class AppModel {
         guard !isWorking || !showProgress else { return }
         let workToken = showProgress ? beginWork() : nil
         guard !showProgress || workToken != nil else { return }
-        await refreshScriptHubInternal(updatesStatus: true)
+        let engineUpdated = await refreshScriptHubInternal(updatesStatus: true)
         if let workToken { endWork(workToken) }
+        if engineUpdated {
+            statusMessage = "Script Hub 引擎已更新，正在重新转换全部模块…"
+            await runSynchronization(
+                limitingTo: nil,
+                forceReconversion: true,
+                refreshEngine: false
+            )
+        }
     }
 
-    private func refreshScriptHubInternal(updatesStatus: Bool) async {
+    @discardableResult
+    private func refreshScriptHubInternal(updatesStatus: Bool) async -> Bool {
         if updatesStatus { statusMessage = "正在更新 App 内置 Script Hub 引擎…" }
         do {
             let result = try await upstreamService.fetchManagedModule(
@@ -1341,6 +1372,7 @@ final class AppModel {
             if updatesStatus {
                 statusMessage = result.changed ? "内置 Script Hub 引擎已更新至 \(result.revision)" : "内置 Script Hub 引擎已是最新"
             }
+            return result.changed
         } catch {
             upstreamState.lastCheckedAt = .now
             upstreamState.lastError = error.localizedDescription
@@ -1349,6 +1381,7 @@ final class AppModel {
             if updatesStatus {
                 statusMessage = hasCache ? "上游检查失败，继续使用 App 内缓存引擎" : "内置转换引擎尚不可用"
             }
+            return false
         }
     }
 

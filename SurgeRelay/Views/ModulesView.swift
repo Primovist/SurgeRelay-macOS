@@ -349,7 +349,7 @@ struct ModulesView: View {
                             Label("添加模块", systemImage: "plus")
                         }
                         Button {
-                            Task { await model.updateAll() }
+                            Task { await model.updateAll(forceReconversion: true) }
                         } label: {
                             Label("更新全部", systemImage: "arrow.clockwise")
                         }

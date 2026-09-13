@@ -38,7 +38,7 @@ struct MenuBarContent: View {
         Divider()
 
         Button("更新全部模块") {
-            Task { await model.updateAll() }
+            Task { await model.updateAll(forceReconversion: true) }
         }
         .disabled(
             model.modules.isEmpty

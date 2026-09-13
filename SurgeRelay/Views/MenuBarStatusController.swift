@@ -121,7 +121,7 @@ final class MenuBarStatusController: NSObject, NSMenuDelegate {
 
     @objc private func updateAll() {
         guard let model else { return }
-        Task { await model.updateAll() }
+        Task { await model.updateAll(forceReconversion: true) }
     }
 
     @objc private func copyCombinedURL() {

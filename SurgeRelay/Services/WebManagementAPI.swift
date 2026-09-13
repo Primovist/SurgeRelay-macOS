@@ -64,8 +64,8 @@ enum WebManagementAPI {
                     body: try model.diagnosticsData()
                 )
             case ("POST", "/api/update-all"):
-                Task { await model.updateAll() }
-                return .json(ActionPayload(ok: true, message: "已开始更新全部模块。"), status: 202, reason: "Accepted")
+                Task { await model.updateAll(forceReconversion: true) }
+                return .json(ActionPayload(ok: true, message: "已开始重新转换全部模块。"), status: 202, reason: "Accepted")
             case ("POST", "/api/modules"):
                 let mutation = try request.decodeBody(WebModuleMutation.self)
                 try await model.addModule(from: mutation.draft())

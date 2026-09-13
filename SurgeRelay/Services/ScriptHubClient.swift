@@ -180,3 +180,15 @@ actor SourceRevisionService {
         return snapshot.contentHash == module.sourceContentHash ? .unchanged(snapshot) : .changed(snapshot)
     }
 }
+
+enum ModuleSynchronizationPolicy {
+    static func requiresConversion(
+        nativeModule: Bool,
+        cachedEngineRevision: String?,
+        currentEngineRevision: String?,
+        forceReconversion: Bool
+    ) -> Bool {
+        if forceReconversion { return true }
+        return !nativeModule && cachedEngineRevision != currentEngineRevision
+    }
+}

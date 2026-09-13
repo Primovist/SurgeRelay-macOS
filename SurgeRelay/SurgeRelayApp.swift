@@ -202,7 +202,7 @@ struct SurgeRelayApp: App {
             SurgeRelaySettingsCommands()
             CommandGroup(after: .newItem) {
                 Button("更新全部模块") {
-                    Task { await model.updateAll() }
+                    Task { await model.updateAll(forceReconversion: true) }
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(model.isWorking || model.deviceMode == .client)
