@@ -42,8 +42,7 @@ struct ModuleEditorView: View {
                     Toggle("包含在总模块中", isOn: $draft.isEnabled)
                 }
                 Section("来源") {
-                    TextField("原始地址", text: $draft.sourceURL, prompt: Text("https://example.com/module.plugin"))
-                        .lineLimit(1)
+                    URLInputField(title: "原始地址", text: $draft.sourceURL, prompt: "https://example.com/module.plugin")
                     Picker("来源格式", selection: $draft.sourceFormat) {
                         ForEach(ModuleSourceFormat.allCases) { format in
                             Text(format.title).tag(format)

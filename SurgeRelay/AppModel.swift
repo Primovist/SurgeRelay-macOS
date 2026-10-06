@@ -430,14 +430,18 @@ final class AppModel {
         statusMessage = githubToken.isEmpty ? "GitHub Token 已移除" : "GitHub Token 已保存到本机配置"
     }
 
-    func pushRemoteScriptHubSettings() async {
-        guard isClientMode else { return }
+    @discardableResult
+    func pushRemoteScriptHubSettings() async -> Bool {
+        guard isClientMode else { return false }
+        var didSave = false
         await performRemoteMutation { client in
             try await client.pushScriptHubSettings(
                 moduleURL: settings.scriptHubModuleURL,
                 automaticallyUpdate: settings.automaticallyUpdateScriptHub
             )
+            didSave = true
         }
+        return didSave
     }
 
     func pushRemoteSyncSettings(includeToken: Bool = true) async {

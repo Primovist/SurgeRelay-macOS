@@ -1,6 +1,105 @@
 import AppKit
 import SwiftUI
 
+/// Keep AppKit's field editor alive while the surrounding SwiftUI form updates.
+struct URLInputField: View {
+    let title: String
+    @Binding var text: String
+    var prompt = ""
+    var onEditingChanged: (Bool) -> Void = { _ in }
+    var onSubmit: (() -> Void)?
+
+    var body: some View {
+        LabeledContent(title) {
+            URLTextField(
+                text: $text,
+                title: title,
+                prompt: prompt,
+                onEditingChanged: onEditingChanged,
+                onSubmit: onSubmit
+            )
+        }
+    }
+}
+
+struct URLTextField: NSViewRepresentable {
+    @Binding var text: String
+    let title: String
+    var prompt = ""
+    var onEditingChanged: (Bool) -> Void = { _ in }
+    var onSubmit: (() -> Void)?
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = Self.makeTextField()
+        field.delegate = context.coordinator
+        field.stringValue = text
+        field.placeholderString = prompt
+        field.setAccessibilityLabel(title)
+        return field
+    }
+
+    static func makeTextField() -> NSTextField {
+        let field = NSTextField()
+        field.isEditable = true
+        field.isSelectable = true
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+        field.font = .systemFont(ofSize: NSFont.systemFontSize)
+        field.usesSingleLineMode = true
+        field.maximumNumberOfLines = 1
+        field.cell?.isScrollable = true
+        field.cell?.wraps = false
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        field.placeholderString = prompt
+        field.setAccessibilityLabel(title)
+        context.coordinator.synchronize(text: text, to: field)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: URLTextField
+
+        init(parent: URLTextField) { self.parent = parent }
+
+        func synchronize(text: String, to field: NSTextField) {
+            // An active field editor owns its selection, undo and marked text.
+            // Do not inject a SwiftUI/remote snapshot into an editing session.
+            guard field.currentEditor() == nil, field.stringValue != text else { return }
+            field.stringValue = text
+        }
+
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            parent.onEditingChanged(true)
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            let value = field.currentEditor()?.string ?? field.stringValue
+            if parent.text != value { parent.text = value }
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            controlTextDidChange(notification)
+            parent.onEditingChanged(false)
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            guard selector == #selector(NSResponder.insertNewline(_:)), let onSubmit = parent.onSubmit else {
+                return false
+            }
+            onSubmit()
+            return true
+        }
+    }
+}
+
 struct ModuleIconView: View {
     private static let imageCache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()

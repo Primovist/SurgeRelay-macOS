@@ -1,7 +1,114 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import SurgeRelay
 
 final class SurgeRelayTests: XCTestCase {
+    private struct URLFieldRefreshProbe: View {
+        @Binding var text: String
+        let revision: Int
+
+        var body: some View {
+            Form {
+                Section("来源") {
+                    URLInputField(title: "原始地址", text: $text)
+                }
+                Text("名称查询完成：\(revision)")
+            }
+            .formStyle(.grouped)
+        }
+    }
+
+    @MainActor
+    func testURLFieldKeepsCaretAcrossSwiftUIFormRefresh() async throws {
+        _ = NSApplication.shared
+        var text = "https://example.com/module.plugin"
+        let binding = Binding(get: { text }, set: { text = $0 })
+        let host = NSHostingView(rootView: URLFieldRefreshProbe(text: binding, revision: 0))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 250),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        @MainActor func findField(in view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField, field.isEditable { return field }
+            return view.subviews.lazy.compactMap { findField(in: $0) }.first
+        }
+        let field = try XCTUnwrap(findField(in: host))
+        XCTAssertTrue(window.makeFirstResponder(field))
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.setSelectedRange(NSRange(location: 12, length: 0))
+        for revision in 1...3 {
+            editor.insertText("X", replacementRange: editor.selectedRange())
+            let caret = editor.selectedRange()
+            let value = editor.string
+            host.rootView = URLFieldRefreshProbe(text: binding, revision: revision)
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(50))
+            XCTAssertTrue(findField(in: host) === field)
+            XCTAssertTrue(field.currentEditor() === editor)
+            XCTAssertEqual(editor.string, value)
+            XCTAssertEqual(editor.selectedRange(), caret)
+            XCTAssertEqual(text, value)
+        }
+        let coordinator = try XCTUnwrap(field.delegate as? URLTextField.Coordinator)
+        XCTAssertFalse(coordinator.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        _ = window.makeFirstResponder(nil)
+    }
+
+    @MainActor
+    func testURLFieldPreservesEditingSessionDuringFormAndRemoteUpdates() async throws {
+        _ = NSApplication.shared
+        var text = "https://example.com/module.plugin"
+        let binding = Binding(get: { text }, set: { text = $0 })
+        let parent = URLTextField(text: binding, title: "原始地址")
+        let coordinator = URLTextField.Coordinator(parent: parent)
+        let field = URLTextField.makeTextField()
+        field.delegate = coordinator
+        coordinator.synchronize(text: text, to: field)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 80),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView = field
+        XCTAssertTrue(window.makeFirstResponder(field))
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.setSelectedRange(NSRange(location: 12, length: 0))
+
+        for insertion in ["X", "中文", "😀"] {
+            editor.insertText(insertion, replacementRange: editor.selectedRange())
+            coordinator.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+            let value = editor.string
+            let caret = editor.selectedRange()
+            coordinator.synchronize(text: text, to: field)
+            coordinator.synchronize(text: "https://old.example.com/old.plugin", to: field)
+            XCTAssertEqual(editor.string, value)
+            XCTAssertEqual(editor.selectedRange(), caret)
+            XCTAssertEqual(text, value)
+        }
+
+        editor.setSelectedRange(NSRange(location: 8, length: 3))
+        coordinator.synchronize(text: text, to: field)
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 8, length: 3))
+        editor.insertText("replacement", replacementRange: editor.selectedRange())
+        coordinator.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        XCTAssertEqual(text, editor.string)
+
+        editor.setMarkedText("测试", selectedRange: NSRange(location: 2, length: 0), replacementRange: editor.selectedRange())
+        let markedRange = editor.markedRange()
+        let composingText = editor.string
+        coordinator.synchronize(text: "old snapshot", to: field)
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertEqual(editor.markedRange(), markedRange)
+        XCTAssertEqual(editor.string, composingText)
+        editor.unmarkText()
+        XCTAssertTrue(window.makeFirstResponder(nil))
+        coordinator.synchronize(text: "https://new.example.com/new.plugin", to: field)
+        XCTAssertEqual(field.stringValue, "https://new.example.com/new.plugin")
+    }
+
     func testFilenameSanitizerCreatesSurgeModuleExtension() {
         XCTAssertEqual(FilenameSanitizer.sgmoduleName(from: "YouTube Ads.sgmodule"), "YouTube-Ads.sgmodule")
         XCTAssertEqual(FilenameSanitizer.sgmoduleName(from: "folder/bad:name"), "folder-bad-name.sgmodule")

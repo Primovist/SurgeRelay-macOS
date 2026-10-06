@@ -83,6 +83,11 @@ struct SettingsView: View {
     @State private var originalGitHubCloudflareInput = ""
     @State private var originalGitHubToken = ""
     @State private var didLoadGitHubDraft = false
+    @State private var scriptHubModuleURLInput = ""
+    @State private var isEditingScriptHubModuleURL = false
+    @State private var scriptHubModuleURLIsDirty = false
+    @State private var scriptHubSettingsSaveTask: Task<Bool, Never>?
+    @State private var scriptHubSettingsSaveSerial = 0
     @State private var backStack: [SettingsPane] = []
     @State private var forwardStack: [SettingsPane] = []
     @State private var isHistoryNavigation = false
@@ -480,34 +485,38 @@ struct SettingsView: View {
                     )) ?? "尚未检查")
                         .foregroundStyle(.secondary)
                 }
-                TextField("上游模块", text: Binding(
-                    get: { model.settings.scriptHubModuleURL },
-                    set: {
-                        model.settings.scriptHubModuleURL = $0
-                        if model.isClientMode {
-                            Task { await model.pushRemoteScriptHubSettings() }
-                        } else {
-                            model.saveSettings()
+                URLInputField(
+                    title: "上游模块",
+                    text: Binding(
+                        get: { scriptHubModuleURLInput },
+                        set: {
+                            scriptHubModuleURLInput = $0
+                            scriptHubModuleURLIsDirty = true
                         }
-                    }
-                ))
+                    ),
+                    onEditingChanged: { editing in
+                        isEditingScriptHubModuleURL = editing
+                        if !editing { saveScriptHubModuleURL() }
+                    },
+                    onSubmit: saveScriptHubModuleURL
+                )
                 Toggle("自动更新", isOn: Binding(
                     get: { model.settings.automaticallyUpdateScriptHub },
                     set: {
                         model.settings.automaticallyUpdateScriptHub = $0
-                        if model.isClientMode {
-                            Task { await model.pushRemoteScriptHubSettings() }
-                        } else {
-                            model.saveSettings()
-                        }
+                        saveScriptHubModuleURL(force: true)
                     }
                 ))
                 HStack(spacing: 8) {
                     Button("检查更新", systemImage: "arrow.clockwise") {
                         Task {
                             isCheckingUpdate = true
+                            defer { isCheckingUpdate = false }
+                            saveScriptHubModuleURL()
+                            if let saveTask = scriptHubSettingsSaveTask {
+                                guard await saveTask.value else { return }
+                            }
                             await model.refreshScriptHub(showProgress: false)
-                            isCheckingUpdate = false
                         }
                     }
                     .disabled(isCheckingUpdate)
@@ -526,6 +535,52 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            if !scriptHubModuleURLIsDirty, scriptHubSettingsSaveTask == nil {
+                scriptHubModuleURLInput = model.settings.scriptHubModuleURL
+            }
+        }
+        .onChange(of: model.settings.scriptHubModuleURL) { _, value in
+            if !isEditingScriptHubModuleURL, !scriptHubModuleURLIsDirty, scriptHubSettingsSaveTask == nil {
+                scriptHubModuleURLInput = value
+            }
+        }
+        .onDisappear { saveScriptHubModuleURL() }
+    }
+
+    private func saveScriptHubModuleURL() {
+        saveScriptHubModuleURL(force: false)
+    }
+
+    private func saveScriptHubModuleURL(force: Bool) {
+        guard force || scriptHubModuleURLIsDirty else { return }
+        let url = scriptHubModuleURLInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        scriptHubModuleURLIsDirty = false
+        if model.isClientMode {
+            // Serialize saves so a delayed older request cannot win on the server.
+            let previousSave = scriptHubSettingsSaveTask
+            let automaticallyUpdate = model.settings.automaticallyUpdateScriptHub
+            scriptHubSettingsSaveSerial += 1
+            let serial = scriptHubSettingsSaveSerial
+            scriptHubSettingsSaveTask = Task { @MainActor in
+                _ = await previousSave?.value
+                model.settings.scriptHubModuleURL = url
+                model.settings.automaticallyUpdateScriptHub = automaticallyUpdate
+                let didSave = await model.pushRemoteScriptHubSettings()
+                if serial == scriptHubSettingsSaveSerial {
+                    scriptHubSettingsSaveTask = nil
+                    if !didSave {
+                        scriptHubModuleURLIsDirty = true
+                    } else if !isEditingScriptHubModuleURL, !scriptHubModuleURLIsDirty {
+                        scriptHubModuleURLInput = url
+                    }
+                }
+                return didSave
+            }
+        } else {
+            model.settings.scriptHubModuleURL = url
+            model.saveSettings()
+        }
     }
 
     private var synchronizationSettings: some View {
