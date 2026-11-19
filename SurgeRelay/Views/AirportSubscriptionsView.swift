@@ -655,6 +655,11 @@ private struct AirportSubscriptionEditor: View {
                 }
                 Section("订阅") {
                     TextField("订阅链接", text: $draft.sourceURL, prompt: Text("https://…"))
+                    TextField(
+                        "User-Agent",
+                        text: $draft.userAgent,
+                        prompt: Text("留空使用默认值 \(AirportSubscription.defaultUserAgent)")
+                    )
                 }
                 Section("节点输出方式") {
                     Picker("节点输出方式", selection: $draft.outputMode) {

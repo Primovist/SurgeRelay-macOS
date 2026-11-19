@@ -296,6 +296,7 @@ ui.airportForm?.elements.optimizeNodeNames?.addEventListener('change', syncAirpo
 ui.airportForm?.elements.nodeSortOrder?.addEventListener('change', syncAirportProcessingControls);
 ui.airportForm?.addEventListener('change', syncAirportOutputControls);
 ui.airportForm?.elements.name?.addEventListener('input', syncAirportOutputControls);
+ui.airportForm?.elements.userAgent?.addEventListener('input', syncAirportOutputControls);
 ui.airportForm?.elements.removeNodeNameEmoji?.addEventListener('change', updateAirportNameExample);
 ui.airportForm?.elements.nodeNameRemovalTerms?.addEventListener('input', updateAirportNameExample);
 ui.airportForm?.addEventListener('input', handleAirportKeywordInput);
@@ -1828,6 +1829,9 @@ function openAirportEditor(airport = null) {
   const form = ui.airportForm.elements;
   form.name.value = airport?.name || '';
   form.sourceURL.value = airport?.sourceURL || '';
+  form.userAgent.value = airport?.userAgent ?? '';
+  const defaultUserAgent = state?.airports?.defaultUserAgent;
+  form.userAgent.placeholder = defaultUserAgent ? `留空使用默认值 ${defaultUserAgent}` : '留空使用默认值';
   form.policyRegexFilter.value = airport?.policyRegexFilter || '';
   form.nodeNameTemplate.value = airport?.nodeNameTemplate || '';
   const processing = airport?.nodeProcessing || {};
@@ -2017,6 +2021,7 @@ function collectAirportPayload() {
   const form = ui.airportForm.elements;
   return {
     name: form.name.value.trim(), sourceURL: form.sourceURL.value.trim(),
+    userAgent: form.userAgent.value.trim(),
     policyRegexFilter: form.policyRegexFilter.value.trim(), nodeNameTemplate: form.nodeNameTemplate.value.trim(),
     nodeNameOptimization: {
       isEnabled: form.optimizeNodeNames.checked,

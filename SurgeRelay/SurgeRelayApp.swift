@@ -1,5 +1,4 @@
 import AppKit
-import CoreServices
 import Sparkle
 import SwiftUI
 
@@ -91,32 +90,60 @@ private struct SurgeRelaySettingsCommands: Commands {
 
 @MainActor
 final class SurgeRelayAppDelegate: NSObject, NSApplicationDelegate {
-    private var launchedAsLoginItem = false
+    private let wasRegisteredAtLaunch = LaunchAtLoginService.isEnabled
+    private var openMainWindow: (() -> Void)?
+    private var needsMainWindow = false
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        launchedAsLoginItem = Self.currentLaunchIsLoginItem
-        NSApp.setActivationPolicy(launchedAsLoginItem ? .accessory : .regular)
-        MenuBarStatusController.shared.prepare(isEnabled: RelayDeviceConfiguration.mode == .server)
+        NSApp.setActivationPolicy(.accessory)
+        MenuBarStatusController.shared.setEnabled(RelayDeviceConfiguration.mode == .server)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        launchedAsLoginItem = launchedAsLoginItem || Self.currentLaunchIsLoginItem
+        let launchedAsLoginItem = LaunchAtLoginService.isLoginLaunch(
+            event: NSAppleEventManager.shared().currentAppleEvent,
+            startedByLaunchd: getppid() == 1,
+            isRegistered: wasRegisteredAtLaunch
+        )
         guard launchedAsLoginItem else {
-            NSApp.setActivationPolicy(.regular)
+            requestMainWindow()
             return
         }
 
         if RelayDeviceConfiguration.mode == .client {
             try? LaunchAtLoginService.setEnabled(false)
             NSApp.terminate(nil)
+        }
+    }
+
+    func configureWindowActions(model: AppModel, updater: SPUUpdater, openWindow: OpenWindowAction) {
+        let presentWindow: (String) -> Void = { id in
+            NSApp.setActivationPolicy(.regular)
+            openWindow(id: id)
+            NSApp.activate()
+        }
+        let openMainWindow = { presentWindow(SurgeRelayWindow.main) }
+        self.openMainWindow = openMainWindow
+        MenuBarStatusController.shared.configure(
+            model: model,
+            updater: updater,
+            openMainWindow: openMainWindow,
+            openSettingsWindow: { presentWindow(SurgeRelayWindow.settings) }
+        )
+
+        if needsMainWindow {
+            requestMainWindow()
+        }
+    }
+
+    private func requestMainWindow() {
+        guard let openMainWindow else {
+            needsMainWindow = true
             return
         }
-
-        NSApp.setActivationPolicy(.accessory)
+        needsMainWindow = false
         DispatchQueue.main.async {
-            NSApp.windows
-                .filter { $0.level == .normal }
-                .forEach { $0.orderOut(nil) }
+            openMainWindow()
         }
     }
 
@@ -135,25 +162,16 @@ final class SurgeRelayAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        guard !flag else { return true }
-        sender.setActivationPolicy(.regular)
-        sender.activate()
-        let window = sender.windows.first(where: { $0.canBecomeMain && $0.level == .normal })
-        window?.deminiaturize(nil)
-        window?.makeKeyAndOrderFront(nil)
-        return true
-    }
-
-    private static var currentLaunchIsLoginItem: Bool {
-        NSAppleEventManager.shared()
-            .currentAppleEvent?
-            .paramDescriptor(forKeyword: AEKeyword(keyAELaunchedAsLogInItem)) != nil
+        if flag { return true }
+        requestMainWindow()
+        return false
     }
 }
 
 @main
 struct SurgeRelayApp: App {
     @NSApplicationDelegateAdaptor(SurgeRelayAppDelegate.self) private var appDelegate
+    @Environment(\.openWindow) private var openWindow
     @State private var model: AppModel
     private let updaterDelegate: SurgeRelayUpdaterDelegate
     private let updaterController: SPUStandardUpdaterController
@@ -174,16 +192,16 @@ struct SurgeRelayApp: App {
     }
 
     var body: some Scene {
+        let _ = appDelegate.configureWindowActions(
+            model: model,
+            updater: updaterController.updater,
+            openWindow: openWindow
+        )
         Window("Surge Relay", id: SurgeRelayWindow.main) {
             RootView()
                 .environment(model)
                 .environment(\.locale, Locale(identifier: "zh_CN"))
             .frame(minWidth: 920, minHeight: 640)
-            .background(MenuBarStatusHost(
-                isEnabled: model.deviceMode == .server,
-                model: model,
-                updater: updaterController.updater
-            ))
             .onReceive(NotificationCenter.default.publisher(for: .checkForSurgeRelayUpdates)) { _ in
                 updaterController.updater.checkForUpdates()
             }
@@ -192,8 +210,8 @@ struct SurgeRelayApp: App {
         .windowToolbarStyle(.unified(showsTitle: false))
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1100, height: 720)
-        .restorationBehavior(.automatic)
-        .defaultLaunchBehavior(.presented)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
         .commands {
             SurgeRelayAppInfoCommands()
             CommandGroup(after: .appInfo) {
@@ -219,6 +237,7 @@ struct SurgeRelayApp: App {
         .defaultSize(width: 800, height: 620)
         .windowResizability(.contentMinSize)
         .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
 
     }
 }

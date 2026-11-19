@@ -567,9 +567,11 @@ enum WebManagementAPI {
 
     private static func airportPayload(model: AppModel) -> WebAirportOverviewPayload {
         WebAirportOverviewPayload(
+            defaultUserAgent: AirportSubscription.defaultUserAgent,
             subscriptions: model.airportSubscriptions.map {
                 WebAirportPayload(
                     id: $0.id.uuidString.lowercased(), name: $0.name, sourceURL: $0.sourceURL,
+                    userAgent: $0.userAgent,
                     policyRegexFilter: $0.policyRegexFilter, nodeNameTemplate: $0.nodeNameTemplate,
                     nodeNameOptimization: $0.nodeNameOptimization,
                     nodeProcessing: $0.nodeProcessing,
@@ -707,6 +709,7 @@ private struct WebStatePayload: Encodable {
 }
 
 private struct WebAirportOverviewPayload: Encodable {
+    let defaultUserAgent: String
     let subscriptions: [WebAirportPayload]
     let configurations: [WebConfigurationPayload]
     let configurationPreview: String
@@ -720,6 +723,7 @@ private struct WebAirportPayload: Encodable {
     let id: String
     let name: String
     let sourceURL: String
+    let userAgent: String
     let policyRegexFilter: String
     let nodeNameTemplate: String
     let nodeNameOptimization: AirportNodeNameOptimization
@@ -744,6 +748,7 @@ private struct WebConfigurationPayload: Encodable {
 private struct WebAirportMutation: Decodable {
     let name: String
     let sourceURL: String
+    let userAgent: String?
     let policyRegexFilter: String?
     let nodeNameTemplate: String?
     let nodeNameOptimization: AirportNodeNameOptimization?
@@ -756,6 +761,7 @@ private struct WebAirportMutation: Decodable {
         var draft = existing.map(AirportSubscriptionDraft.init(subscription:)) ?? AirportSubscriptionDraft()
         draft.name = name
         draft.sourceURL = sourceURL
+        if let userAgent { draft.userAgent = userAgent }
         if let policyRegexFilter { draft.policyRegexFilter = policyRegexFilter }
         if let nodeNameTemplate { draft.nodeNameTemplate = nodeNameTemplate }
         if let nodeNameOptimization { draft.nodeNameOptimization = nodeNameOptimization }

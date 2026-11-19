@@ -138,9 +138,12 @@ struct AirportNodeProcessingOptions: Codable, Equatable, Sendable {
 }
 
 struct AirportSubscription: Codable, Equatable, Identifiable, Sendable {
+    static let defaultUserAgent = "Surge/6.12.0"
+
     var id = UUID()
     var name = ""
     var sourceURL = ""
+    var userAgent = ""
     var policyRegexFilter = ""
     var nodeNameTemplate = ""
     var nodeNameOptimization = AirportNodeNameOptimization()
@@ -156,6 +159,17 @@ struct AirportSubscription: Codable, Equatable, Identifiable, Sendable {
         name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    var requestUserAgent: String {
+        let value = userAgent.trimmingCharacters(in: .whitespaces)
+        return value.isEmpty ? Self.defaultUserAgent : value
+    }
+
+    func hasSameRequestSource(as other: Self) -> Bool {
+        sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            == other.sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            && requestUserAgent == other.requestUserAgent
+    }
+
     var isConfigured: Bool {
         guard !trimmedName.isEmpty,
               let url = URL(string: sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -167,6 +181,7 @@ struct AirportSubscription: Codable, Equatable, Identifiable, Sendable {
         id: UUID = UUID(),
         name: String = "",
         sourceURL: String = "",
+        userAgent: String = "",
         policyRegexFilter: String = "",
         nodeNameTemplate: String = "",
         nodeNameOptimization: AirportNodeNameOptimization = AirportNodeNameOptimization(),
@@ -181,6 +196,7 @@ struct AirportSubscription: Codable, Equatable, Identifiable, Sendable {
         self.id = id
         self.name = name
         self.sourceURL = sourceURL
+        self.userAgent = userAgent
         self.policyRegexFilter = policyRegexFilter
         self.nodeNameTemplate = nodeNameTemplate
         self.nodeNameOptimization = nodeNameOptimization
@@ -194,7 +210,7 @@ struct AirportSubscription: Codable, Equatable, Identifiable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, sourceURL, policyRegexFilter, nodeNameTemplate, nodeNameOptimization, nodeProcessing, iconURL
+        case id, name, sourceURL, userAgent, policyRegexFilter, nodeNameTemplate, nodeNameOptimization, nodeProcessing, iconURL
         case outputMode, isEnabled, lastUpdatedAt, lastPublishedAt, lastError
     }
 
@@ -203,6 +219,7 @@ struct AirportSubscription: Codable, Equatable, Identifiable, Sendable {
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
         sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL) ?? ""
+        userAgent = try container.decodeIfPresent(String.self, forKey: .userAgent) ?? ""
         policyRegexFilter = try container.decodeIfPresent(String.self, forKey: .policyRegexFilter) ?? ""
         nodeNameTemplate = try container.decodeIfPresent(String.self, forKey: .nodeNameTemplate) ?? ""
         nodeNameOptimization = try container.decodeIfPresent(
@@ -225,6 +242,7 @@ struct AirportSubscription: Codable, Equatable, Identifiable, Sendable {
 struct AirportSubscriptionDraft: Equatable {
     var name = ""
     var sourceURL = ""
+    var userAgent = ""
     var policyRegexFilter = ""
     var nodeNameTemplate = ""
     var nodeNameOptimization = AirportNodeNameOptimization()
@@ -238,6 +256,7 @@ struct AirportSubscriptionDraft: Equatable {
     init(subscription: AirportSubscription) {
         name = subscription.name
         sourceURL = subscription.sourceURL
+        userAgent = subscription.userAgent
         policyRegexFilter = subscription.policyRegexFilter
         nodeNameTemplate = subscription.nodeNameTemplate
         nodeNameOptimization = subscription.nodeNameOptimization

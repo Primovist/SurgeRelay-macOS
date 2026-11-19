@@ -1,6 +1,5 @@
 import AppKit
 import Sparkle
-import SwiftUI
 
 /// AppKit owns the status item so client launches never construct SwiftUI's
 /// MenuBarExtra scene. The singleton also keeps the server item alive when all
@@ -15,12 +14,6 @@ final class MenuBarStatusController: NSObject, NSMenuDelegate {
     private var openMainWindowAction: (() -> Void)?
     private var openSettingsWindowAction: (() -> Void)?
 
-    /// Installs the status item before SwiftUI creates a window scene. Login-item
-    /// launches can otherwise remain dormant until the user activates the Dock icon.
-    func prepare(isEnabled: Bool) {
-        setEnabled(isEnabled)
-    }
-
     /// Keeps the AppKit status item in sync even when a device-mode change is
     /// initiated from a different SwiftUI scene, such as the Settings window.
     func setEnabled(_ isEnabled: Bool) {
@@ -33,7 +26,6 @@ final class MenuBarStatusController: NSObject, NSMenuDelegate {
     }
 
     func configure(
-        isEnabled: Bool,
         model: AppModel,
         updater: SPUUpdater,
         openMainWindow: @escaping () -> Void,
@@ -43,8 +35,6 @@ final class MenuBarStatusController: NSObject, NSMenuDelegate {
         self.updater = updater
         openMainWindowAction = openMainWindow
         openSettingsWindowAction = openSettingsWindow
-
-        setEnabled(isEnabled)
     }
 
     private func installStatusItemIfNeeded() {
@@ -161,71 +151,5 @@ final class MenuBarStatusController: NSObject, NSMenuDelegate {
 
     @objc private func terminateCompletely() {
         SurgeRelayTerminationCoordinator.terminateCompletely()
-    }
-}
-
-struct MenuBarStatusHost: View {
-    @Environment(\.openWindow) private var openWindow
-    let isEnabled: Bool
-    let model: AppModel
-    let updater: SPUUpdater
-
-    var body: some View {
-        MenuBarStatusInstaller(
-            isEnabled: isEnabled,
-            model: model,
-            updater: updater,
-            openMainWindow: { presentWindow(id: SurgeRelayWindow.main) },
-            openSettingsWindow: { presentWindow(id: SurgeRelayWindow.settings) }
-        )
-    }
-
-    private func presentWindow(id: String) {
-        NSApp.setActivationPolicy(.regular)
-        openWindow(id: id)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            let normalWindows = NSApp.windows.filter { $0.level == .normal && $0.canBecomeMain }
-            let window: NSWindow?
-            if id == SurgeRelayWindow.settings {
-                window = normalWindows.first(where: { $0.title == "设置" })
-            } else {
-                window = normalWindows.first(where: { $0.title != "设置" })
-            }
-            window?.deminiaturize(nil)
-            window?.level = .normal
-            NSRunningApplication.current.activate(options: [.activateAllWindows])
-            window?.makeKeyAndOrderFront(nil)
-            window?.orderFrontRegardless()
-        }
-    }
-}
-
-private struct MenuBarStatusInstaller: NSViewRepresentable {
-    let isEnabled: Bool
-    let model: AppModel
-    let updater: SPUUpdater
-    let openMainWindow: () -> Void
-    let openSettingsWindow: () -> Void
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        MenuBarStatusController.shared.configure(
-            isEnabled: isEnabled,
-            model: model,
-            updater: updater,
-            openMainWindow: openMainWindow,
-            openSettingsWindow: openSettingsWindow
-        )
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        MenuBarStatusController.shared.configure(
-            isEnabled: isEnabled,
-            model: model,
-            updater: updater,
-            openMainWindow: openMainWindow,
-            openSettingsWindow: openSettingsWindow
-        )
     }
 }

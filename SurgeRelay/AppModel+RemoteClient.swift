@@ -278,6 +278,7 @@ extension AppModel {
                     id: id,
                     name: payload.name,
                     sourceURL: payload.sourceURL,
+                    userAgent: payload.userAgent ?? "",
                     policyRegexFilter: payload.policyRegexFilter,
                     nodeNameTemplate: payload.nodeNameTemplate ?? "",
                     nodeNameOptimization: payload.nodeNameOptimization ?? AirportNodeNameOptimization(),

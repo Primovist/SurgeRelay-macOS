@@ -525,6 +525,7 @@ struct RemoteAirportPayload: Codable, Sendable {
     var id: String
     var name: String
     var sourceURL: String
+    var userAgent: String?
     var policyRegexFilter: String
     var nodeNameTemplate: String?
     var nodeNameOptimization: AirportNodeNameOptimization?
@@ -706,6 +707,7 @@ struct RemoteModuleMutation: Codable, Sendable {
 struct RemoteAirportMutation: Codable, Sendable {
     var name: String
     var sourceURL: String
+    var userAgent: String
     var policyRegexFilter: String
     var nodeNameTemplate: String
     var nodeNameOptimization: AirportNodeNameOptimization
@@ -717,6 +719,7 @@ struct RemoteAirportMutation: Codable, Sendable {
     init(draft: AirportSubscriptionDraft) {
         name = draft.name
         sourceURL = draft.sourceURL
+        userAgent = draft.userAgent
         policyRegexFilter = draft.policyRegexFilter
         nodeNameTemplate = draft.nodeNameTemplate
         nodeNameOptimization = draft.nodeNameOptimization
