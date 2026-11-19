@@ -6,6 +6,15 @@
     <description>Surge Relay arm64 releases maintained by Primovist.</description>
     <language>zh-CN</language>
     <item>
+      <title>202611191115</title>
+      <pubDate>Thu, 19 Nov 2026 03:19:42 +0000</pubDate>
+      <sparkle:version>202611191115</sparkle:version>
+      <sparkle:shortVersionString>202611191115</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+      <enclosure url='https://github.com/Primovist/SurgeRelay-macOS/releases/download/202611191115/Surge-Relay-202611191115-arm64.zip' length='31939229' type='application/octet-stream' sparkle:edSignature='fKjXEcu/IYWk5/em3lyMpGgusLKUs4xWxGGJwO/E4VdxNS6G9whODSG8+q9a6gZxew8/YquRYY0VUuxuicwPAQ=='/>
+    </item>
+    <item>
       <title>202610061249</title>
       <pubDate>Tue, 06 Oct 2026 04:53:12 +0000</pubDate>
       <sparkle:version>202610061249</sparkle:version>
