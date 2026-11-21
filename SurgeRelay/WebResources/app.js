@@ -86,7 +86,7 @@ const advancedGroups = [
     id: 'script-conversion', title: '启用脚本转换',
     description: '仅在脚本使用了来源 App 独有 API 时启用。启用后，App 会预先转换脚本并将辅助资源发布到 GitHub。',
     fields: [
-      textField('scriptConversionKeywords', '脚本转换 1 关键词', '例如：response-body.js+request.js', '多关键词使用 + 分隔。'),
+      textField('scriptConversionKeywords', '脚本转换 1 关键词', '例如：response-body.js+request.js', '输入关键词后点按 + 添加。'),
       toggleField('convertAllScripts', '脚本转换 1：全部转换'),
       textField('responseScriptConversionKeywords', '脚本转换 2 关键词', '例如：response.js+parser.js', '转换 2 会为 $done(body) 包装 response。'),
       toggleField('convertAllResponseScripts', '脚本转换 2：全部转换并包装 response'),
@@ -112,13 +112,13 @@ const advancedGroups = [
   { id: 'policy', title: '指定策略', description: '为未指定策略或使用非 Surge 内置策略的规则指定一个替代策略。', fields: [textField('policy', '策略', '例如：DIRECT、REJECT 或你的策略组名称')] },
   {
     id: 'mitm', title: '修改 MitM 主机名', fields: [
-      textField('mitmAdd', '添加主机名', '例如：api.example.com, *.example.com', '多个主机名使用英文逗号分隔。'),
+      textField('mitmAdd', '添加主机名', '例如：api.example.com, *.example.com', '每次添加一个主机名。'),
       textField('mitmRemove', '删除主机名', '例如：ads.example.com, track.example.com'),
       textField('mitmRemoveRegex', '按正则删除主机名', '例如：(^|\\.)ads\\.example\\.com$')
     ]
   },
-  pairedGroup('script-name', '修改脚本名', 'scriptNameTargets', '关键词锁定脚本 (njsnametarget)', '例如：checkin+account', 'scriptNames', '新的脚本名 (njsname)', '例如：签到任务+账户任务'),
-  pairedGroup('timeout', '修改脚本超时', 'timeoutTargets', '关键词锁定脚本 (timeoutt)', '例如：checkin+account', 'timeoutValues', '超时值 (timeoutv)', '例如：10+30'),
+  pairedGroup('script-name', '修改脚本名', 'scriptNameTargets', '关键词锁定脚本 (njsnametarget)', '例如：checkin', 'scriptNames', '新的脚本名 (njsname)', '例如：签到任务'),
+  pairedGroup('timeout', '修改脚本超时', 'timeoutTargets', '关键词锁定脚本 (timeoutt)', '例如：checkin', 'timeoutValues', '超时值 (timeoutv)', '例如：10'),
   pairedGroup('engine', '修改脚本引擎（Surge）', 'engineTargets', '关键词锁定脚本 (enginet)', '例如：legacy-script', 'engineValues', '引擎 (enginev)', '例如：webview'),
   pairedGroup('cron', '修改定时任务', 'cronTargets', '关键词锁定任务 (cron)', '例如：daily-checkin', 'cronExpressions', 'Cron 表达式 (cronexp)', '例如：0.0.8.*.*.*'),
   pairedGroup('arguments', '修改参数', 'argumentTargets', '关键词锁定脚本 (arg)', '例如：account-script', 'argumentValues', 'Argument 新值 (argv)', '例如：key=value'),
@@ -156,6 +156,20 @@ let moduleArgumentsState = null;
 let moduleArgumentsLoadToken = 0;
 let previewText = '';
 let previewSavedText = '';
+let previewPath = '';
+let previewETag = null;
+let previewLoadGeneration = 0;
+const pendingPreviewWrites = new Set();
+function previewDraftKey(path) { return `surge-relay:preview-draft:${path}`; }
+function persistPreviewDraft() {
+  if (!previewPath || !document.querySelector('#code-editor')) return;
+  try {
+    if (previewText === previewSavedText) localStorage.removeItem(previewDraftKey(previewPath));
+    else localStorage.setItem(previewDraftKey(previewPath), JSON.stringify({ text: previewText, base: previewSavedText, etag: previewETag }));
+  } catch (_) { showToast('浏览器无法保存草稿，请先拷贝内容备份。', true); }
+}
+window.addEventListener('pagehide', persistPreviewDraft);
+
 let previewSearchQuery = '';
 let previewSearchMatches = [];
 let previewSearchIndex = -1;
@@ -298,6 +312,7 @@ ui.airportForm?.addEventListener('change', syncAirportOutputControls);
 ui.airportForm?.elements.name?.addEventListener('input', syncAirportOutputControls);
 ui.airportForm?.elements.userAgent?.addEventListener('input', syncAirportOutputControls);
 ui.airportForm?.elements.removeNodeNameEmoji?.addEventListener('change', updateAirportNameExample);
+ui.airportForm?.elements.smartNodeNameCleanup?.addEventListener('change', updateAirportNameExample);
 ui.airportForm?.elements.nodeNameRemovalTerms?.addEventListener('input', updateAirportNameExample);
 ui.airportForm?.addEventListener('input', handleAirportKeywordInput);
 ui.airportForm?.addEventListener('click', event => {
@@ -364,7 +379,7 @@ function textField(key, label, prompt = '', help = '', multiline = false) { retu
 function toggleField(key, label) { return { type: 'toggle', key, label }; }
 function headingField(label) { return { type: 'heading', label }; }
 function pairedGroup(id, title, firstKey, firstLabel, firstPrompt, secondKey, secondLabel, secondPrompt) {
-  return { id, title, description: '多项使用 + 分隔；目标和值需要一一对应。', fields: [textField(firstKey, firstLabel, firstPrompt), textField(secondKey, secondLabel, secondPrompt)] };
+  return { id, title, paired: true, fields: [textField(firstKey, firstLabel, firstPrompt), textField(secondKey, secondLabel, secondPrompt)] };
 }
 
 async function api(path, options = {}) {
@@ -386,7 +401,8 @@ async function api(path, options = {}) {
     throw new Error(message);
   }
   const contentType = response.headers.get('content-type') || '';
-  return contentType.includes('application/json') ? response.json() : response.text();
+  const data = await (contentType.includes('application/json') ? response.json() : response.text());
+  return options.metadata ? { data, etag: response.headers.get('etag') } : data;
 }
 
 async function loadState(initial = false, renderCurrentDetail = false) {
@@ -735,12 +751,12 @@ function renderAirportDetail(animate = true) {
     try { host = new URL(airport.sourceURL).host || airport.sourceURL; } catch (_) {}
     const icon = airport.iconURL
       ? `<img src="${escapeAttribute(airport.iconURL)}" alt="" loading="lazy">`
-      : `<span class="symbol" data-symbol="airplane"></span>`;
+      : `<span class="symbol" data-symbol="airplane.circle.fill" aria-hidden="true"></span>`;
     const status = airport.lastError
       ? `<small class="airport-error">${escapeHTML(airport.lastError)}</small>`
       : `<small>${escapeHTML(host)}${airport.lastUpdatedAt ? ` · ${escapeHTML(formatDate(airport.lastUpdatedAt))}` : ''}</small>`;
     return `<div class="airport-row">
-      <span class="module-icon ${airport.iconURL ? '' : 'placeholder'}">${icon}</span>
+      <span class="module-icon ${airport.iconURL ? '' : 'airport-default-icon'}">${icon}</span>
       <span class="airport-copy"><strong>${escapeHTML(airport.name)}</strong>${status}</span>
       <div class="airport-actions">
         <label class="module-toggle" title="启用机场"><input type="checkbox" data-airport-toggle="${airport.id}" ${airport.isEnabled ? 'checked' : ''}><span class="toggle-track" aria-hidden="true"></span></label>
@@ -792,7 +808,7 @@ function renderModuleDetail(module, animate = true) {
   const headerSection = `
     <section class="form-section-view module-detail-header-section">
       <div class="group-box module-detail-header-card">
-        <div class="module-detail-icon-clickable" data-action="edit-icon" title="点击修改图标">
+        <div class="module-detail-icon-clickable" data-action="edit-icon" title="点按修改图标">
           ${iconHtml}
         </div>
         <div class="module-detail-copy">
@@ -1013,39 +1029,59 @@ function previewShell(label, editable) {
           <button class="preview-search-button next" data-action="preview-search-next" type="button" aria-label="下一个结果" disabled><span class="symbol" data-symbol="chevron.right"></span></button>
         </div>
       </div>
-      ${editable ? '<div class="code-editor-stack"><pre class="code-editor-highlight-layer" id="code-editor-highlight-layer" aria-hidden="true"></pre><textarea class="code-editor" id="code-editor" spellcheck="false" aria-label="模块内容">正在载入…</textarea></div>' : '<pre class="code-view" id="code-view">正在载入…</pre>'}
+      ${editable ? '<div class="code-editor-stack"><pre class="code-editor-highlight-layer" id="code-editor-highlight-layer" aria-hidden="true">正在载入…</pre><textarea class="code-editor" id="code-editor" spellcheck="false" aria-label="模块内容">正在载入…</textarea></div>' : '<pre class="code-view" id="code-view">正在载入…</pre>'}
     </div>
   </section>`;
 }
 
 async function loadPreview(path, editable) {
+  const generation = ++previewLoadGeneration;
+  previewPath = path;
+  const target = document.querySelector(editable ? '#code-editor' : '#code-view');
+  if (editable && target) target.disabled = true;
   try {
-    const text = await api(path);
+    const { data: text, etag } = await api(path, { metadata: true });
+    if (generation !== previewLoadGeneration || !target?.isConnected) return;
+    previewText = text; previewSavedText = text; previewETag = etag;
     if (editable) {
-      const editor = document.querySelector('#code-editor');
-      if (!editor) return;
-      previewText = text; previewSavedText = text; editor.value = text;
-      previewEditorMirrorDirty = true;
-      rebuildPreviewEditorMirror();
-      editor.addEventListener('input', () => { previewText = editor.value; previewEditorMirrorDirty = true; const save = document.querySelector('[data-action="save-preview"]'); if (save) save.disabled = previewText === previewSavedText; refreshPreviewSearch(false); });
-      editor.addEventListener('scroll', syncPreviewEditorHighlightScroll, { passive: true });
-    } else {
-      const view = document.querySelector('#code-view');
-      if (view) setTemplateHTML(view, highlightCode(text));
-      previewText = text; previewSavedText = text;
-    }
+      try {
+        const draft = JSON.parse(localStorage.getItem(previewDraftKey(path)) || 'null');
+        if (draft && typeof draft.text === 'string' && typeof draft.base === 'string' && draft.text !== text) {
+          previewText = draft.text; previewSavedText = draft.base; previewETag = draft.etag;
+          showToast(draft.base === text ? '已恢复未保存草稿' : '草稿已恢复；服务器内容已变化，保存前请拷贝草稿并重新载入比较。', draft.base !== text);
+        }
+      } catch (_) {}
+      target.value = previewText; target.disabled = false;
+      previewEditorMirrorDirty = true; rebuildPreviewEditorMirror();
+      const save = document.querySelector('[data-action="save-preview"]');
+      if (save) save.disabled = previewText === previewSavedText;
+      target.addEventListener('input', () => {
+        previewText = target.value; previewEditorMirrorDirty = true; persistPreviewDraft();
+        if (save) save.disabled = previewText === previewSavedText || pendingPreviewWrites.has(path);
+        refreshPreviewSearch(false);
+      });
+      target.addEventListener('scroll', syncPreviewEditorHighlightScroll, { passive: true });
+    } else { setTemplateHTML(target, highlightCode(text)); }
     refreshPreviewSearch(false);
-  } catch (error) { showToast(error.message, true); }
+  } catch (error) { if (generation === previewLoadGeneration) showToast(error.message, true); }
 }
 
 
 function advancedGroupMarkup(group) {
-  return `<details class="option-group" data-option-group="${group.id}"><summary><span class="symbol" data-symbol="chevron.right"></span>${escapeHTML(group.title)}</summary><div class="option-content">${group.description ? `<p class="option-description">${escapeHTML(group.description)}</p>` : ''}${group.fields.map(optionFieldMarkup).join('')}</div></details>`;
+  return `<details class="option-group" data-option-group="${group.id}"><summary><span class="symbol" data-symbol="chevron.right"></span>${escapeHTML(group.title)}</summary><div class="option-content">${group.description ? `<p class="option-description">${escapeHTML(group.description)}</p>` : ''}${group.paired ? pairedOptionsMarkup(group) : group.fields.map(optionFieldMarkup).join('')}</div></details>`;
 }
 
 function optionFieldMarkup(field) {
   if (field.type === 'heading') return `<div class="option-row"><strong>${escapeHTML(field.label)}</strong></div>`;
   if (field.type === 'toggle') return `<label class="option-row option-toggle"><span>${escapeHTML(field.label)}</span><input name="option_${field.key}" type="checkbox" role="switch"><span class="toggle-track" aria-hidden="true"></span></label>`;
+  const separators = { scriptConversionKeywords: '+', responseScriptConversionKeywords: '+', includeKeywords: '+', excludeKeywords: '+', mitmAdd: ',', mitmRemove: ',', sniKeywords: '+', preMatchingKeywords: '+' };
+  if (separators[field.key]) {
+    const name = `option_${field.key}`;
+    return `<div class="option-row keyword-editor" data-keyword-editor="${name}" data-separator="${separators[field.key]}">
+      <label>${escapeHTML(field.label)}</label><div class="keyword-entry"><input data-keyword-input type="text" placeholder="输入一项"><button type="button" class="keyword-add-button" data-keyword-add disabled aria-label="添加${escapeAttribute(field.label)}">＋</button></div>
+      <input type="hidden" name="${name}"><div class="keyword-chips" data-keyword-chips hidden></div>
+      ${field.help && !field.help.includes('分隔') ? `<p class="option-help">${escapeHTML(field.help)}</p>` : ''}</div>`;
+  }
   const input = field.type === 'textarea'
     ? `<textarea name="option_${field.key}" rows="2" placeholder="${escapeAttribute(field.prompt)}"></textarea>`
     : `<input name="option_${field.key}" type="text" placeholder="${escapeAttribute(field.prompt)}">`;
@@ -1149,6 +1185,8 @@ function populateScriptHubOptions(values = scriptHubDefaults) {
     if (!field) return;
     if (typeof options[key] === 'boolean') field.checked = options[key]; else field.value = options[key] || '';
   });
+  ui.advancedOptions.querySelectorAll('[data-keyword-editor]').forEach(editor => { editor.querySelector('[data-keyword-input]').value = ''; renderAirportKeywordEditor(editor); });
+  ui.advancedOptions.querySelectorAll('[data-paired-editor]').forEach(populatePairedOptions);
   advancedGroups.forEach(group => {
     const configured = group.fields.some(field => field.key && options[field.key] !== scriptHubDefaults[field.key]);
     const element = ui.advancedOptions.querySelector(`[data-option-group="${group.id}"]`);
@@ -1382,12 +1420,7 @@ function paintPreviewSearchMatches() {
   if (!editor || !layer) return;
   if (previewEditorMirrorDirty) rebuildPreviewEditorMirror();
   else unwrapPreviewSearchMatches(layer);
-  const hasMatches = previewSearchMatches.length > 0;
-  editor.classList.toggle('search-highlighting', hasMatches);
-  layer.hidden = !hasMatches;
-  if (!hasMatches) {
-    return;
-  }
+  layer.hidden = false;
   wrapPreviewSearchMatches(layer);
   syncPreviewEditorHighlightScroll();
 }
@@ -1793,6 +1826,7 @@ function openEditor(module = null) {
   manualNameEdited = Boolean(module);
   form.sourceURL.value = module?.sourceURL || '';
   form.sourceFormat.value = module?.sourceFormat || 'automatic';
+  form.refreshIntervalMinutes.value = module?.refreshIntervalMinutes ?? -1;
   form.isEnabled.checked = module?.isEnabled ?? true;
   populateScriptHubOptions(module?.scriptHubOptions || scriptHubDefaults);
   setAdvancedExpanded(Boolean(module?.advancedSummary || hasAdvancedValues(module?.scriptHubOptions)));
@@ -1806,7 +1840,7 @@ function openEditor(module = null) {
 async function saveModule(event) {
   event.preventDefault();
   const form = ui.moduleForm.elements;
-  const payload = { name: form.name.value.trim(), sourceURL: form.sourceURL.value.trim(), sourceFormat: form.sourceFormat.value, isEnabled: form.isEnabled.checked, scriptHubOptions: collectScriptHubOptions() };
+  const payload = { name: form.name.value.trim(), sourceURL: form.sourceURL.value.trim(), sourceFormat: form.sourceFormat.value, refreshIntervalMinutes: Number(form.refreshIntervalMinutes.value), isEnabled: form.isEnabled.checked, scriptHubOptions: collectScriptHubOptions() };
   ui.saveModule.disabled = true;
   try {
     const path = editingID ? `/api/modules/${editingID}` : '/api/modules';
@@ -1845,7 +1879,8 @@ function openAirportEditor(airport = null) {
   form.skipCertificateVerification.value = processing.skipCertificateVerification || 'inherit';
   form.optimizeNodeNames.checked = airport?.nodeNameOptimization?.isEnabled ?? true;
   form.removeNodeNameEmoji.checked = airport?.nodeNameOptimization?.removesEmoji ?? true;
-  form.nodeNameRemovalTerms.value = airport?.nodeNameOptimization?.removalTerms || 'IEPL, IPEL, 专线';
+  form.smartNodeNameCleanup.checked = airport?.nodeNameOptimization?.smartCleanup ?? false;
+  setAirportKeywords('nodeNameRemovalTerms', airport?.nodeNameOptimization?.removalTerms ?? 'IEPL, IPEL, 专线');
   form.iconURL.value = airport?.iconURL || '';
   const outputMode = airport?.outputMode || 'configuration';
   const outputControl = ui.airportForm.querySelector(`input[name="outputMode"][value="${outputMode}"]`);
@@ -1895,6 +1930,7 @@ function syncAirportNameOptimizationControls() {
   if (!form) return;
   const disabled = !form.optimizeNodeNames.checked;
   form.removeNodeNameEmoji.disabled = disabled;
+  form.smartNodeNameCleanup.disabled = disabled;
   form.nodeNameRemovalTerms.disabled = disabled;
   ui.airportForm.querySelectorAll('[data-airport-optimization-dependent]').forEach(element => {
     element.hidden = disabled;
@@ -1933,7 +1969,7 @@ function setAirportKeywords(name, keywords) {
 
 function renderAirportKeywordEditor(editor) {
   const name = editor.dataset.keywordEditor;
-  const values = splitAirportKeywords(editor.querySelector(`input[name="${name}"]`).value);
+  const values = editorKeywords(editor);
   const chips = editor.querySelector('[data-keyword-chips]');
   chips.hidden = values.length === 0;
   chips.innerHTML = values.map((value, index) => `
@@ -1949,9 +1985,11 @@ function addAirportKeyword(editor) {
   const input = editor.querySelector('[data-keyword-input]');
   const value = input.value.trim();
   if (!value) return;
-  const values = splitAirportKeywords(hiddenInput.value);
-  if (!values.some(item => item.localeCompare(value, undefined, { sensitivity: 'accent' }) === 0)) values.push(value);
-  hiddenInput.value = values.join(', ');
+  const values = editorKeywords(editor);
+  const additions = editor.dataset.separator ? value.split(editor.dataset.separator).map(item => item.trim()).filter(Boolean) : splitAirportKeywords(value);
+  for (const item of additions) if (!values.some(existing => editor.dataset.separator === '+' ? existing === item : existing.toLocaleLowerCase() === item.toLocaleLowerCase())) values.push(item);
+  hiddenInput.value = values.join(editor.dataset.separator || ', ');
+  hiddenInput.dispatchEvent(new Event('input', { bubbles: true }));
   input.value = '';
   renderAirportKeywordEditor(editor);
   syncAirportOutputControls();
@@ -1974,9 +2012,10 @@ function handleAirportKeywordClick(event) {
   if (!removeButton) return;
   const name = editor.dataset.keywordEditor;
   const hiddenInput = editor.querySelector(`input[name="${name}"]`);
-  const values = splitAirportKeywords(hiddenInput.value);
+  const values = editorKeywords(editor);
   values.splice(Number(removeButton.dataset.keywordRemove), 1);
-  hiddenInput.value = values.join(', ');
+  hiddenInput.value = values.join(editor.dataset.separator || ', ');
+  hiddenInput.dispatchEvent(new Event('input', { bubbles: true }));
   renderAirportKeywordEditor(editor);
   syncAirportOutputControls();
 }
@@ -1987,11 +2026,317 @@ function handleAirportKeywordKeyDown(event) {
   addAirportKeyword(event.target.closest('[data-keyword-editor]'));
 }
 
+// Keep aliases and trailing metadata rules aligned with AirportSubscriptionParser.
+const nodeRegionAliases = {
+  "AC": ["阿森松岛", "阿森松島", "Ascension Island", "AC"],
+  "AD": ["安道尔", "安道爾", "Andorra", "AD"],
+  "AE": ["阿拉伯联合酋长国", "阿拉伯聯合大公國", "阿拉伯聯合酋長國", "United Arab Emirates", "AE", "阿联酋", "阿聯酋"],
+  "AF": ["阿富汗", "Afghanistan", "AF"],
+  "AG": ["安提瓜和巴布达", "安地卡及巴布達", "安提瓜和巴布達", "Antigua & Barbuda", "AG"],
+  "AI": ["安圭拉", "安奎拉", "Anguilla", "AI"],
+  "AL": ["阿尔巴尼亚", "阿爾巴尼亞", "Albania", "AL"],
+  "AM": ["亚美尼亚", "亞美尼亞", "Armenia", "AM"],
+  "AO": ["安哥拉", "Angola", "AO"],
+  "AQ": ["南极洲", "南極洲", "Antarctica", "AQ"],
+  "AR": ["阿根廷", "Argentina", "AR"],
+  "AS": ["美属萨摩亚", "美屬薩摩亞", "American Samoa", "AS"],
+  "AT": ["奥地利", "奧地利", "Austria", "AT"],
+  "AU": ["澳大利亚", "澳大利亞", "澳洲", "Australia", "AU"],
+  "AW": ["阿鲁巴", "荷屬阿魯巴", "阿魯巴", "Aruba", "AW"],
+  "AX": ["奥兰群岛", "奧蘭群島", "Åland Islands", "AX"],
+  "AZ": ["阿塞拜疆", "亞塞拜然", "亞塞拜疆", "Azerbaijan", "AZ"],
+  "BA": ["波斯尼亚和黑塞哥维那", "波士尼亞與赫塞哥維納", "波斯尼亞和黑塞哥維那", "Bosnia & Herzegovina", "BA", "波黑", "波黑共和国", "波黑共和國"],
+  "BB": ["巴巴多斯", "巴貝多", "Barbados", "BB"],
+  "BD": ["孟加拉国", "孟加拉", "Bangladesh", "BD", "孟加拉國"],
+  "BE": ["比利时", "比利時", "Belgium", "BE"],
+  "BF": ["布基纳法索", "布吉納法索", "布基納法索", "Burkina Faso", "BF"],
+  "BG": ["保加利亚", "保加利亞", "Bulgaria", "BG"],
+  "BH": ["巴林", "Bahrain", "BH"],
+  "BI": ["布隆迪", "蒲隆地", "Burundi", "BI"],
+  "BJ": ["贝宁", "貝南", "貝寧", "Benin", "BJ"],
+  "BL": ["圣巴泰勒米", "聖巴瑟米", "聖巴泰勒米", "St. Barthélemy", "BL"],
+  "BM": ["百慕大", "百慕達", "Bermuda", "BM"],
+  "BN": ["文莱", "汶萊", "Brunei", "BN"],
+  "BO": ["玻利维亚", "玻利維亞", "Bolivia", "BO"],
+  "BQ": ["荷属加勒比区", "荷蘭加勒比區", "Caribbean Netherlands", "BQ"],
+  "BR": ["巴西", "Brazil", "BR"],
+  "BS": ["巴哈马", "巴哈馬", "Bahamas", "BS"],
+  "BT": ["不丹", "Bhutan", "BT"],
+  "BV": ["布韦岛", "布威島", "鮑威特島", "Bouvet Island", "BV"],
+  "BW": ["博茨瓦纳", "波札那", "博茨瓦納", "Botswana", "BW"],
+  "BY": ["白俄罗斯", "白俄羅斯", "Belarus", "BY"],
+  "BZ": ["伯利兹", "貝里斯", "伯利茲", "Belize", "BZ"],
+  "CA": ["加拿大", "Canada", "CA"],
+  "CC": ["科科斯（基林）群岛", "科克斯（基靈）群島", "科科斯（基林）群島", "Cocos (Keeling) Islands", "CC"],
+  "CD": ["刚果（金）", "剛果（金夏沙）", "Congo - Kinshasa", "CD"],
+  "CF": ["中非共和国", "中非共和國", "Central African Republic", "CF"],
+  "CG": ["刚果（布）", "剛果（布拉薩）", "Congo - Brazzaville", "CG"],
+  "CH": ["瑞士", "Switzerland", "CH"],
+  "CI": ["科特迪瓦", "象牙海岸", "Côte d’Ivoire", "CI"],
+  "CK": ["库克群岛", "庫克群島", "Cook Islands", "CK"],
+  "CL": ["智利", "Chile", "CL"],
+  "CM": ["喀麦隆", "喀麥隆", "Cameroon", "CM"],
+  "CN": ["中国大陆", "中國大陸", "China mainland", "CN"],
+  "CO": ["哥伦比亚", "哥倫比亞", "Colombia", "CO"],
+  "CP": ["克利珀顿岛", "克里派頓島", "克里珀頓島", "Clipperton Island", "CP"],
+  "CQ": ["萨克岛", "薩克島", "Sark", "CQ"],
+  "CR": ["哥斯达黎加", "哥斯大黎加", "哥斯達黎加", "Costa Rica", "CR"],
+  "CU": ["古巴", "Cuba", "CU"],
+  "CV": ["佛得角", "維德角", "Cape Verde", "CV"],
+  "CW": ["库拉索", "庫拉索", "Curaçao", "CW"],
+  "CX": ["圣诞岛", "聖誕島", "Christmas Island", "CX"],
+  "CY": ["塞浦路斯", "Cyprus", "CY", "賽普勒斯"],
+  "CZ": ["捷克", "Czechia", "Czech Republic", "CZ"],
+  "DE": ["德国", "德國", "Germany", "DE"],
+  "DG": ["迪戈加西亚岛", "迪亞哥加西亞島", "Diego Garcia", "DG"],
+  "DJ": ["吉布提", "吉布地", "Djibouti", "DJ"],
+  "DK": ["丹麦", "丹麥", "Denmark", "DK"],
+  "DM": ["多米尼克", "Dominica", "DM"],
+  "DO": ["多米尼加共和国", "多明尼加共和國", "多米尼加共和國", "Dominican Republic", "DO", "多米尼加"],
+  "DZ": ["阿尔及利亚", "阿爾及利亞", "Algeria", "DZ"],
+  "EA": ["休达及梅利利亚", "休達與梅利利亞", "Ceuta & Melilla", "EA"],
+  "EC": ["厄瓜多尔", "厄瓜多", "厄瓜多爾", "Ecuador", "EC"],
+  "EE": ["爱沙尼亚", "愛沙尼亞", "Estonia", "EE"],
+  "EG": ["埃及", "Egypt", "EG"],
+  "EH": ["西撒哈拉", "Western Sahara", "EH"],
+  "ER": ["厄立特里亚", "厄利垂亞", "厄立特里亞", "Eritrea", "ER"],
+  "ES": ["西班牙", "Spain", "ES"],
+  "ET": ["埃塞俄比亚", "衣索比亞", "埃塞俄比亞", "Ethiopia", "ET"],
+  "EU": ["欧盟", "歐盟", "European Union", "EU"],
+  "EZ": ["欧元区", "歐元區", "Eurozone", "EZ"],
+  "FI": ["芬兰", "芬蘭", "Finland", "FI"],
+  "FJ": ["斐济", "斐濟", "Fiji", "FJ"],
+  "FK": ["福克兰群岛", "福克蘭群島", "Falkland Islands", "FK"],
+  "FM": ["密克罗尼西亚", "密克羅尼西亞", "Micronesia", "FM"],
+  "FO": ["法罗群岛", "法羅群島", "Faroe Islands", "FO"],
+  "FR": ["法国", "法國", "France", "FR"],
+  "GA": ["加蓬", "加彭", "Gabon", "GA"],
+  "GB": ["英国", "英國", "United Kingdom", "UK", "GB"],
+  "GD": ["格林纳达", "格瑞那達", "格林納達", "Grenada", "GD"],
+  "GE": ["格鲁吉亚", "格魯吉亞", "Georgia", "GE", "喬治亞"],
+  "GF": ["法属圭亚那", "法屬圭亞那", "French Guiana", "GF"],
+  "GG": ["根西岛", "根息", "Guernsey", "GG"],
+  "GH": ["加纳", "迦納", "加納", "Ghana", "GH"],
+  "GI": ["直布罗陀", "直布羅陀", "Gibraltar", "GI"],
+  "GL": ["格陵兰", "格陵蘭", "Greenland", "GL"],
+  "GM": ["冈比亚", "甘比亞", "岡比亞", "Gambia", "GM"],
+  "GN": ["几内亚", "幾內亞", "Guinea", "GN"],
+  "GP": ["瓜德罗普", "瓜地洛普", "Guadeloupe", "GP"],
+  "GQ": ["赤道几内亚", "赤道幾內亞", "Equatorial Guinea", "GQ"],
+  "GR": ["希腊", "希臘", "Greece", "GR"],
+  "GS": ["南乔治亚和南桑威奇群岛", "南喬治亞與南三明治群島", "南佐治亞島與南桑威奇群島", "So. Georgia & So. Sandwich Isl.", "GS"],
+  "GT": ["危地马拉", "瓜地馬拉", "危地馬拉", "Guatemala", "GT"],
+  "GU": ["关岛", "關島", "Guam", "GU"],
+  "GW": ["几内亚比绍", "幾內亞比索", "幾內亞比紹", "Guinea-Bissau", "GW"],
+  "GY": ["圭亚那", "蓋亞那", "圭亞那", "Guyana", "GY"],
+  "HK": ["香港", "Hong Kong", "HK"],
+  "HM": ["赫德岛和麦克唐纳群岛", "赫德島及麥唐納群島", "Heard & McDonald Islands", "HM"],
+  "HN": ["洪都拉斯", "宏都拉斯", "Honduras", "HN"],
+  "HR": ["克罗地亚", "克羅埃西亞", "克羅地亞", "Croatia", "HR"],
+  "HT": ["海地", "Haiti", "HT"],
+  "HU": ["匈牙利", "Hungary", "HU"],
+  "IC": ["加纳利群岛", "加那利群島", "Canary Islands", "IC"],
+  "ID": ["印尼", "印度尼西亚", "印度尼西亞", "Indonesia", "ID"],
+  "IE": ["爱尔兰", "愛爾蘭", "Ireland", "IE"],
+  "IL": ["以色列", "Israel", "IL"],
+  "IM": ["马恩岛", "曼島", "馬恩島", "Isle of Man", "IM"],
+  "IN": ["印度", "India", "IN"],
+  "IO": ["查戈斯群岛", "查戈斯群島", "Chagos Archipelago", "IO"],
+  "IQ": ["伊拉克", "Iraq", "IQ"],
+  "IR": ["伊朗", "Iran", "IR"],
+  "IS": ["冰岛", "冰島", "Iceland", "IS"],
+  "IT": ["意大利", "義大利", "Italy", "IT"],
+  "JE": ["泽西岛", "澤西島", "Jersey", "JE"],
+  "JM": ["牙买加", "牙買加", "Jamaica", "JM"],
+  "JO": ["约旦", "約旦", "Jordan", "JO"],
+  "JP": ["日本", "Japan", "JP"],
+  "KE": ["肯尼亚", "肯亞", "肯尼亞", "Kenya", "KE"],
+  "KG": ["吉尔吉斯斯坦", "吉爾吉斯", "Kyrgyzstan", "KG"],
+  "KH": ["柬埔寨", "Cambodia", "KH"],
+  "KI": ["基里巴斯", "吉里巴斯", "Kiribati", "KI"],
+  "KM": ["科摩罗", "葛摩", "科摩羅", "Comoros", "KM"],
+  "KN": ["圣基茨和尼维斯", "聖克里斯多福及尼維斯", "聖基茨和尼維斯", "St. Kitts & Nevis", "KN"],
+  "KP": ["朝鲜", "北韓", "North Korea", "KP"],
+  "KR": ["韩国", "韓國", "Korea", "KR", "南韓", "South Korea"],
+  "KW": ["科威特", "Kuwait", "KW"],
+  "KY": ["开曼群岛", "開曼群島", "Cayman Islands", "KY"],
+  "KZ": ["哈萨克斯坦", "哈薩克", "Kazakhstan", "KZ"],
+  "LA": ["老挝", "寮國", "老撾", "Laos", "LA"],
+  "LB": ["黎巴嫩", "Lebanon", "LB"],
+  "LC": ["圣卢西亚", "聖露西亞", "聖盧西亞", "St. Lucia", "LC"],
+  "LI": ["列支敦士登", "列支敦斯登", "Liechtenstein", "LI"],
+  "LK": ["斯里兰卡", "斯里蘭卡", "Sri Lanka", "LK"],
+  "LR": ["利比里亚", "賴比瑞亞", "利比里亞", "Liberia", "LR"],
+  "LS": ["莱索托", "賴索托", "萊索托", "Lesotho", "LS"],
+  "LT": ["立陶宛", "Lithuania", "LT"],
+  "LU": ["卢森堡", "盧森堡", "Luxembourg", "LU"],
+  "LV": ["拉脱维亚", "拉脫維亞", "Latvia", "LV"],
+  "LY": ["利比亚", "利比亞", "Libya", "LY"],
+  "MA": ["摩洛哥", "Morocco", "MA"],
+  "MC": ["摩纳哥", "摩納哥", "Monaco", "MC"],
+  "MD": ["摩尔多瓦", "摩爾多瓦", "Moldova", "MD"],
+  "ME": ["黑山", "蒙特內哥羅", "Montenegro", "ME"],
+  "MF": ["法属圣马丁", "法屬聖馬丁", "St. Martin", "MF"],
+  "MG": ["马达加斯加", "馬達加斯加", "Madagascar", "MG"],
+  "MH": ["马绍尔群岛", "馬紹爾群島", "Marshall Islands", "MH"],
+  "MK": ["北马其顿", "北馬其頓", "North Macedonia", "MK"],
+  "ML": ["马里", "馬利", "馬里", "Mali", "ML"],
+  "MM": ["缅甸", "緬甸", "Myanmar (Burma)", "MM"],
+  "MN": ["蒙古", "Mongolia", "MN"],
+  "MO": ["澳门", "澳門", "Macau", "Macao", "MO"],
+  "MP": ["北马里亚纳群岛", "北馬利安納群島", "Northern Mariana Islands", "MP"],
+  "MQ": ["马提尼克", "馬丁尼克", "Martinique", "MQ"],
+  "MR": ["毛里塔尼亚", "茅利塔尼亞", "毛里塔尼亞", "Mauritania", "MR"],
+  "MS": ["蒙特塞拉特", "蒙哲臘", "Montserrat", "MS"],
+  "MT": ["马耳他", "馬爾他", "馬耳他", "Malta", "MT"],
+  "MU": ["毛里求斯", "模里西斯", "毛里裘斯", "Mauritius", "MU"],
+  "MV": ["马尔代夫", "馬爾地夫", "馬爾代夫", "Maldives", "MV"],
+  "MW": ["马拉维", "馬拉威", "馬拉維", "Malawi", "MW"],
+  "MX": ["墨西哥", "Mexico", "MX"],
+  "MY": ["马来西亚", "馬來西亞", "Malaysia", "MY"],
+  "MZ": ["莫桑比克", "莫三比克", "Mozambique", "MZ"],
+  "NA": ["纳米比亚", "納米比亞", "Namibia", "NA"],
+  "NC": ["新喀里多尼亚", "新喀里多尼亞", "New Caledonia", "NC"],
+  "NE": ["尼日尔", "尼日", "尼日爾", "Niger", "NE"],
+  "NF": ["诺福克岛", "諾福克島", "Norfolk Island", "NF"],
+  "NG": ["尼日利亚", "奈及利亞", "尼日利亞", "Nigeria", "NG"],
+  "NI": ["尼加拉瓜", "Nicaragua", "NI"],
+  "NL": ["荷兰", "荷蘭", "Netherlands", "NL"],
+  "NO": ["挪威", "Norway", "NO"],
+  "NP": ["尼泊尔", "尼泊爾", "Nepal", "NP"],
+  "NR": ["瑙鲁", "諾魯", "瑙魯", "Nauru", "NR"],
+  "NU": ["纽埃", "紐埃島", "Niue", "NU"],
+  "NZ": ["新西兰", "紐西蘭", "New Zealand", "NZ"],
+  "OM": ["阿曼", "Oman", "OM"],
+  "PA": ["巴拿马", "巴拿馬", "Panama", "PA"],
+  "PE": ["秘鲁", "秘魯", "Peru", "PE"],
+  "PF": ["法属波利尼西亚", "法屬玻里尼西亞", "法屬波利尼西亞", "French Polynesia", "PF"],
+  "PG": ["巴布亚新几内亚", "巴布亞紐幾內亞", "巴布亞新畿內亞", "Papua New Guinea", "PG"],
+  "PH": ["菲律宾", "菲律賓", "Philippines", "PH"],
+  "PK": ["巴基斯坦", "Pakistan", "PK"],
+  "PL": ["波兰", "波蘭", "Poland", "PL"],
+  "PM": ["圣皮埃尔和密克隆群岛", "聖皮埃與密克隆群島", "St. Pierre & Miquelon", "PM"],
+  "PN": ["皮特凯恩群岛", "皮特肯群島", "皮特凱恩島", "Pitcairn Islands", "PN"],
+  "PR": ["波多黎各", "Puerto Rico", "PR"],
+  "PS": ["巴勒斯坦领土", "巴勒斯坦自治區", "巴勒斯坦領土", "Palestinian Territories", "PS", "巴勒斯坦"],
+  "PT": ["葡萄牙", "Portugal", "PT"],
+  "PW": ["帕劳", "帛琉", "Palau", "PW"],
+  "PY": ["巴拉圭", "Paraguay", "PY"],
+  "QA": ["卡塔尔", "卡達", "卡塔爾", "Qatar", "QA"],
+  "QO": ["大洋洲边远群岛", "大洋洲邊疆群島", "Outlying Oceania", "QO"],
+  "RE": ["留尼汪", "留尼旺", "Réunion", "RE"],
+  "RO": ["罗马尼亚", "羅馬尼亞", "Romania", "RO"],
+  "RS": ["塞尔维亚", "塞爾維亞", "Serbia", "RS"],
+  "RU": ["俄罗斯", "俄羅斯", "Russia", "RU"],
+  "RW": ["卢旺达", "盧安達", "盧旺達", "Rwanda", "RW"],
+  "SA": ["沙特阿拉伯", "沙烏地阿拉伯", "沙地阿拉伯", "Saudi Arabia", "SA"],
+  "SB": ["所罗门群岛", "索羅門群島", "所羅門群島", "Solomon Islands", "SB"],
+  "SC": ["塞舌尔", "塞席爾", "塞舌爾", "Seychelles", "SC"],
+  "SD": ["苏丹", "蘇丹", "Sudan", "SD"],
+  "SE": ["瑞典", "Sweden", "SE"],
+  "SG": ["新加坡", "狮城", "獅城", "Singapore", "SG"],
+  "SH": ["圣赫勒拿", "聖赫勒拿島", "St. Helena", "SH"],
+  "SI": ["斯洛文尼亚", "斯洛維尼亞", "斯洛文尼亞", "Slovenia", "SI"],
+  "SJ": ["斯瓦尔巴和扬马延", "挪威屬斯瓦巴及尖棉", "斯瓦爾巴特群島及揚馬延島", "Svalbard & Jan Mayen", "SJ"],
+  "SK": ["斯洛伐克", "Slovakia", "SK"],
+  "SL": ["塞拉利昂", "獅子山共和國", "Sierra Leone", "SL"],
+  "SM": ["圣马力诺", "聖馬利諾", "聖馬力諾", "San Marino", "SM"],
+  "SN": ["塞内加尔", "塞內加爾", "Senegal", "SN"],
+  "SO": ["索马里", "索馬利亞", "索馬里", "Somalia", "SO"],
+  "SR": ["苏里南", "蘇利南", "蘇里南", "Suriname", "SR"],
+  "SS": ["南苏丹", "南蘇丹", "South Sudan", "SS"],
+  "ST": ["圣多美和普林西比", "聖多美普林西比", "聖多美和普林西比", "São Tomé & Príncipe", "ST"],
+  "SV": ["萨尔瓦多", "薩爾瓦多", "El Salvador", "SV"],
+  "SX": ["荷属圣马丁", "荷屬聖馬丁", "Sint Maarten", "SX"],
+  "SY": ["叙利亚", "敘利亞", "Syria", "SY"],
+  "SZ": ["斯威士兰", "史瓦帝尼", "斯威士蘭", "Eswatini", "SZ"],
+  "TA": ["特里斯坦-达库尼亚群岛", "特里斯坦達庫尼亞群島", "Tristan da Cunha", "TA"],
+  "TC": ["特克斯和凯科斯群岛", "土克斯及開科斯群島", "特克斯和凱科斯群島", "Turks & Caicos Islands", "TC"],
+  "TD": ["乍得", "查德", "Chad", "TD"],
+  "TF": ["法属南部领地", "法屬南部屬地", "法屬南部領地", "French Southern Territories", "TF"],
+  "TG": ["多哥", "Togo", "TG"],
+  "TH": ["泰国", "泰國", "Thailand", "TH"],
+  "TJ": ["塔吉克斯坦", "塔吉克", "Tajikistan", "TJ"],
+  "TK": ["托克劳", "托克勞群島", "Tokelau", "TK"],
+  "TL": ["东帝汶", "東帝汶", "Timor-Leste", "TL"],
+  "TM": ["土库曼斯坦", "土庫曼", "Turkmenistan", "TM"],
+  "TN": ["突尼斯", "突尼西亞", "Tunisia", "TN"],
+  "TO": ["汤加", "東加", "湯加", "Tonga", "TO"],
+  "TR": ["土耳其", "Turkey", "Türkiye", "TR"],
+  "TT": ["特立尼达和多巴哥", "千里達及托巴哥", "千里達和多巴哥", "Trinidad & Tobago", "TT"],
+  "TV": ["图瓦卢", "吐瓦魯", "圖瓦盧", "Tuvalu", "TV"],
+  "TW": ["台湾", "台灣", "Taiwan", "TW"],
+  "TZ": ["坦桑尼亚", "坦尚尼亞", "坦桑尼亞", "Tanzania", "TZ"],
+  "UA": ["乌克兰", "烏克蘭", "Ukraine", "UA"],
+  "UG": ["乌干达", "烏干達", "Uganda", "UG"],
+  "UM": ["美国本土外小岛屿", "美國本土外小島嶼", "U.S. Outlying Islands", "UM"],
+  "UN": ["联合国", "聯合國", "United Nations", "UN"],
+  "US": ["美国", "美國", "United States", "USA", "US"],
+  "UY": ["乌拉圭", "烏拉圭", "Uruguay", "UY"],
+  "UZ": ["乌兹别克斯坦", "烏茲別克斯坦", "Uzbekistan", "UZ", "烏茲別克"],
+  "VA": ["梵蒂冈", "梵蒂岡", "Vatican City", "VA"],
+  "VC": ["圣文森特和格林纳丁斯", "聖文森及格瑞那丁", "聖文森特和格林納丁斯", "St. Vincent & Grenadines", "VC"],
+  "VE": ["委内瑞拉", "委內瑞拉", "Venezuela", "VE"],
+  "VG": ["英属维尔京群岛", "英屬維京群島", "英屬維爾京群島", "British Virgin Islands", "VG"],
+  "VI": ["美属维尔京群岛", "美屬維京群島", "美屬維爾京群島", "U.S. Virgin Islands", "VI"],
+  "VN": ["越南", "Vietnam", "VN"],
+  "VU": ["瓦努阿图", "萬那杜", "瓦努阿圖", "Vanuatu", "VU"],
+  "WF": ["瓦利斯和富图纳", "瓦利斯群島和富圖那群島", "Wallis & Futuna", "WF"],
+  "WS": ["萨摩亚", "薩摩亞", "Samoa", "WS"],
+  "XK": ["科索沃", "Kosovo", "XK"],
+  "YE": ["也门", "葉門", "也門", "Yemen", "YE"],
+  "YT": ["马约特", "馬約特島", "馬約特", "Mayotte", "YT"],
+  "ZA": ["南非", "South Africa", "ZA"],
+  "ZM": ["赞比亚", "尚比亞", "贊比亞", "Zambia", "ZM"],
+  "ZW": ["津巴布韦", "辛巴威", "津巴布韋", "Zimbabwe", "ZW"]
+};
+
+const nodeRegionPatterns = Object.entries(nodeRegionAliases).flatMap(([code, aliases]) => aliases.map(alias => {
+  const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = /^[\x00-\x7F]+$/.test(alias) ? `(?<![a-z])${escaped}(?![a-z])` : escaped;
+  return { code, length: alias.length, expression: new RegExp(pattern, 'i') };
+})).sort((left, right) => right.length - left.length);
+
+function intelligentlyCleanedNodeName(originalName) {
+  let name = originalName.trim();
+  const trimSeparators = value => value.replace(/^[\s|｜/·•_\-–—]+|[\s|｜/·•_\-–—]+$/g, '');
+  while (true) {
+    const candidate = trimSeparators(name);
+    const region = candidate.match(/[\s|｜/·•_\-–—]+([a-z]{2})$/i);
+    if (region) {
+      const prefix = trimSeparators(candidate.slice(0, region.index));
+      if (isRedundantRegionCode(region[1].toUpperCase(), prefix)) {
+        name = prefix;
+        continue;
+      }
+    }
+    break;
+  }
+  return name;
+}
+
+function isRedundantRegionCode(code, name) {
+  if (!nodeRegionAliases[code]) return false;
+  let strongestMatch = 0;
+  let matchingCodes = new Set();
+  for (const entry of nodeRegionPatterns) {
+    if (entry.length < strongestMatch) break;
+    if (!entry.expression.test(name)) continue;
+    if (entry.length > strongestMatch) {
+      strongestMatch = entry.length;
+      matchingCodes = new Set([entry.code]);
+    } else matchingCodes.add(entry.code);
+  }
+  return matchingCodes.size === 1 && matchingCodes.has(code);
+}
+
 function updateAirportNameExample() {
   const form = ui.airportForm?.elements;
   const output = ui.airportForm?.querySelector('[data-airport-example-optimized]');
   if (!form || !output) return;
-  let name = '🇭🇰 香港实验性 IEPL 专线 1';
+  let name = '🇭🇰 香港 IEPL 01 | 2x HK';
+  if (!form.optimizeNodeNames.checked) { output.textContent = name; return; }
+  if (form.smartNodeNameCleanup.checked) name = intelligentlyCleanedNodeName(name);
   if (form.removeNodeNameEmoji.checked) name = name.replace(/[\p{Extended_Pictographic}\p{Regional_Indicator}\uFE0F\u200D]/gu, '');
   const terms = splitAirportKeywords(form.nodeNameRemovalTerms.value).sort((left, right) => right.length - left.length);
   terms.forEach(term => {
@@ -2026,6 +2371,7 @@ function collectAirportPayload() {
     nodeNameOptimization: {
       isEnabled: form.optimizeNodeNames.checked,
       removesEmoji: form.removeNodeNameEmoji.checked,
+      smartCleanup: form.smartNodeNameCleanup.checked,
       removalTerms: form.nodeNameRemovalTerms.value.trim()
     },
     nodeProcessing: {
@@ -2215,11 +2561,15 @@ function renderWebSettings(animateResize = false) {
   }
   const beforeHeight = animateResize && ui.settingsDialog?.open ? ui.settingsDialog.getBoundingClientRect().height : null;
   if (!SETTINGS_PANES.some(([id]) => id === settingsPane)) settingsPane = 'general';
+  const paneTitle = SETTINGS_PANES.find(([id]) => id === settingsPane)?.[1] || '设置';
+  const heading = document.querySelector('#settings-dialog-title');
+  if (heading) heading.textContent = paneTitle;
   setTemplateHTML(ui.settingsContent, `
     <div class="settings-layout ${settingsMenuOpen ? 'menu-open' : ''}">
       <div class="settings-nav-backdrop" data-settings-action="close-settings-menu"></div>
       <nav class="settings-nav" aria-label="设置分类">
-        ${SETTINGS_PANES.map(([id, title, icon]) => `<button type="button" data-settings-pane="${id}" class="${settingsPane === id ? 'selected' : ''}"><span class="symbol" data-symbol="${icon}"></span>${title}</button>`).join('')}
+        <div class="settings-nav-brand">${brandIconMarkup()}<div><strong>Surge Relay</strong><span>Web 管理</span></div></div>
+        ${SETTINGS_PANES.map(([id, title, icon]) => `<button type="button" data-settings-pane="${id}" class="${settingsPane === id ? 'selected' : ''}" ${settingsPane === id ? 'aria-current="page"' : ''}><span class="symbol" data-symbol="${icon}"></span>${title}</button>`).join('')}
       </nav>
       <div class="settings-pane">${settingsPaneMarkup(settings)}</div>
     </div>`);
@@ -2253,7 +2603,14 @@ function settingsPaneMarkup(settings) {
 function generalSettingsMarkup(settings) {
   return `
     <section class="editor-section"><h3>配置目录</h3><div class="editor-group">
-      <div class="settings-info-row"><strong>配置与同步目录</strong><span>iCloud/Surge/Surge Relay</span><small>Surge Relay 的配置与同步状态保存在 iCloud 云盘中。</small></div>
+      <div class="settings-directory-row">
+        <img class="settings-directory-icon" src="/surge-directory-icon.png?v=1" alt="" width="48" height="48">
+        <div class="settings-directory-copy">
+          <strong>Surge 目录</strong>
+          <span>${escapeHTML(settings.localModuleDirectory || '由服务端 Mac 管理')}</span>
+          <small>Surge 使用的目录；通过 iCloud 同步的模块保存在这里。</small>
+        </div>
+      </div>
     </div></section>
     <section class="editor-section"><h3>自动化</h3><div class="editor-group">
       <label class="form-row compact-control-row"><span>刷新间隔</span><select data-settings-control="refreshIntervalMinutes">
@@ -2270,15 +2627,33 @@ function generalSettingsMarkup(settings) {
     </div></section>`;
 }
 
+const scriptHubChannels = [
+  { title: '稳定版', url: 'https://raw.githubusercontent.com/Script-Hub-Org/Script-Hub/main/modules/script-hub.surge.sgmodule' },
+  { title: '测试版', url: 'https://raw.githubusercontent.com/Script-Hub-Org/Script-Hub/main/modules/script-hub.beta.surge.sgmodule' }
+];
 function scriptHubSettingsMarkup(settings) {
+  const channels = [...scriptHubChannels];
+  const loadedChannel = settings.scriptHubSourceURL
+    ? (scriptHubChannels.find(channel => channel.url === settings.scriptHubSourceURL)?.title || '自定义')
+    : '渠道未知';
+  const title = settings.scriptHubLastError ? '无法检查 Script Hub 更新。'
+    : !settings.scriptHubRevision ? '尚未加载 Script Hub 引擎。'
+    : settings.scriptHubSourceURL !== settings.scriptHubModuleURL ? '更新渠道已更改。'
+    : 'Script Hub 引擎已是最新版本。';
   return `
-    <section class="editor-section"><h3>上游引擎</h3><div class="editor-group">
-      <div class="settings-info-row"><strong>版本</strong><span>${escapeHTML(settings.scriptHubRevision ? settings.scriptHubRevision.slice(0, 7) : '—')}</span><small>上次检查：${escapeHTML(formatDate(settings.scriptHubLastCheckedAt, '尚未检查'))}</small></div>
-      <label class="form-row"><span>上游模块</span><input type="url" data-settings-control="scriptHubModuleURL" value="${escapeAttribute(settings.scriptHubModuleURL)}"></label>
-      ${settingsSwitchRow('自动更新', 'automaticallyUpdateScriptHub', settings.automaticallyUpdateScriptHub)}
+    <section class="script-hub-update-layout">
+      <div class="script-hub-update-card">
+        <span class="script-hub-status-icon ${settings.scriptHubLastError ? 'has-error' : ''}" aria-hidden="true"><svg viewBox="0 0 32 32" focusable="false"><circle cx="16" cy="16" r="11.5" fill="white"/>${settings.scriptHubLastError ? '<path d="M16 9v9m0 4v.2"/>' : settings.scriptHubRevision ? '<path d="m11 16 3.5 4 6.5-9"/>' : '<path d="M16 9v13m-5-5 5 5 5-5"/>'}</svg></span>
+        <div class="script-hub-update-copy"><strong>${escapeHTML(title)}</strong><span>${escapeHTML(settings.scriptHubRevision ? `Script Hub · ${loadedChannel}` : '选择更新渠道以下载转换引擎')}</span></div>
+        <button class="button script-hub-check-button" data-settings-action="refresh-script-hub">检查更新</button>
+      </div>
+      <div class="editor-group script-hub-options">
+        ${settingsSwitchRow('自动更新', 'automaticallyUpdateScriptHub', settings.automaticallyUpdateScriptHub)}
+        <label class="form-row script-hub-channel-row"><span>更新渠道</span><span class="script-hub-channel-control"><select aria-label="更新渠道" data-settings-control="scriptHubModuleURL">${channels.map(channel => `<option value="${escapeAttribute(channel.url)}" ${channel.url === settings.scriptHubModuleURL ? 'selected' : ''}>${escapeHTML(channel.title)}</option>`).join('')}</select><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 6 3-3 3 3M5 10l3 3 3-3"/></svg></span></label>
+      </div>
       ${settings.scriptHubLastError ? `<div class="dialog-message settings-inline-message">${escapeHTML(settings.scriptHubLastError)}</div>` : ''}
-      <div class="settings-inline-actions"><button class="button" data-settings-action="refresh-script-hub"><span class="symbol" data-symbol="refresh"></span>检查更新</button></div>
-    </div></section>`;
+      <div class="script-hub-update-note"><div>上次检查：${escapeHTML(formatDate(settings.scriptHubLastCheckedAt, '尚未检查'))}</div>${settings.scriptHubLastError && settings.scriptHubRevision ? '<div>更新失败，继续使用已加载的引擎。</div>' : ''}</div>
+    </section>`;
 }
 
 function syncSettingsMarkup(settings) {
@@ -2329,10 +2704,11 @@ function githubSyncSettingsMarkup(settings, tokenPlaceholder) {
 }
 
 function diagnosticsSettingsMarkup(settings) {
+  const lint = settings.publishLintIssues?.length ? `<section class="editor-section"><h3>最近发布检查</h3><div class="editor-group">${settings.publishLintIssues.map(issue => `<div class="settings-info-row"><strong>${issue.severity === 'error' ? '错误' : '提醒'} · ${escapeHTML(issue.filePath)}:${issue.line}</strong><small>${escapeHTML(issue.message)}</small></div>`).join('')}</div></section>` : '';
   const rows = settings.updateHistory?.length
     ? settings.updateHistory.map(entry => `<div class="settings-history-row"><div><strong>${escapeHTML(entry.moduleName || '—')}</strong><small>${escapeHTML(entry.message || localizedOutcome(entry.outcome) || '')}</small></div><span>${escapeHTML(localizedOutcome(entry.outcome))}</span></div>`).join('')
     : '<div class="settings-info-row"><strong>暂无更新记录</strong><small>完成一次同步后，结果会显示在这里。</small></div>';
-  return `<section class="editor-section"><h3>最近更新</h3><div class="editor-group">${rows}</div><div class="editor-group settings-action-group"><button class="button" data-settings-action="export-diagnostics"><span class="symbol" data-symbol="square.and.arrow.up"></span>导出诊断</button><button class="button destructive" data-settings-action="clear-diagnostics">清除历史</button></div></section>`;
+  return `${lint}<section class="editor-section"><h3>最近更新</h3><div class="editor-group">${rows}</div><div class="editor-group settings-action-group"><button class="button" data-settings-action="export-diagnostics"><span class="symbol" data-symbol="square.and.arrow.up"></span>导出诊断</button><button class="button destructive" data-settings-action="clear-diagnostics">清除历史</button></div></section>`;
 }
 
 function aboutSettingsMarkup(settings) {
@@ -2462,7 +2838,9 @@ async function handleSettingsChange(event) {
       renderWebSettings();
     } else if (['scriptHubModuleURL', 'automaticallyUpdateScriptHub'].includes(key)) {
       await api('/api/settings/script-hub', { method: 'PUT', json: { scriptHubModuleURL: readSettingsControl('scriptHubModuleURL')?.value?.trim(), automaticallyUpdateScriptHub: readSettingsControl('automaticallyUpdateScriptHub')?.checked } });
+      if (key === 'scriptHubModuleURL') await api('/api/settings/script-hub/refresh', { method: 'POST' });
       await loadState(false, false);
+      renderWebSettings();
     }
   } catch (error) {
     showToast(error.message, true);
@@ -2490,14 +2868,52 @@ async function deleteModule(module) {
 }
 
 async function savePreview(module) {
-  try { const result = await api(`/api/modules/${module.id}/preview`, { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: previewText }); previewSavedText = previewText; document.querySelector('[data-action="save-preview"]').disabled = true; showToast(result.message); }
-  catch (error) { showToast(error.message, true); }
+  const path = `/api/modules/${module.id}/preview`;
+  if (path !== previewPath || pendingPreviewWrites.has(path)) return;
+  if (!previewETag) { showToast('缺少服务器内容版本，请拷贝草稿并重新载入。', true); return; }
+  const submitted = previewText, generation = previewLoadGeneration, etag = previewETag;
+  pendingPreviewWrites.add(path);
+  const save = document.querySelector('[data-action="save-preview"]');
+  if (save) save.disabled = true;
+  try {
+    const result = await api(path, { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8', 'If-Match': etag }, body: submitted });
+    // Reload the canonical saved value, without overwriting input typed during the request.
+    const server = { data: result.content, etag: result.etag };
+    if (previewPath === path && generation === previewLoadGeneration) {
+      previewSavedText = server.data; previewETag = server.etag;
+      if (previewText === submitted) {
+        previewText = server.data;
+        const editor = document.querySelector('#code-editor');
+        if (editor) editor.value = previewText;
+        previewEditorMirrorDirty = true;
+      }
+      persistPreviewDraft();
+    }
+    showToast(result.message);
+  } catch (error) { showToast(error.message, true); }
+  finally {
+    pendingPreviewWrites.delete(path);
+    if (save?.isConnected) save.disabled = previewText === previewSavedText;
+  }
 }
 
 async function restorePreview(module) {
+  const path = `/api/modules/${module.id}/preview`;
+  if (path !== previewPath || pendingPreviewWrites.has(path) || !previewETag) return;
   if (!await askConfirmation('恢复转换结果？', `“${module.name}”的手动修改会被丢弃。`, '恢复')) return;
-  try { const text = await api(`/api/modules/${module.id}/preview`, { method: 'DELETE' }); const editor = document.querySelector('#code-editor'); if (editor) editor.value = text; previewText = text; previewSavedText = text; previewEditorMirrorDirty = true; document.querySelector('[data-action="save-preview"]').disabled = true; refreshPreviewSearch(false); showToast('已恢复转换结果'); }
-  catch (error) { showToast(error.message, true); }
+  const submitted = previewText, generation = previewLoadGeneration, etag = previewETag;
+  pendingPreviewWrites.add(path);
+  try {
+    const response = await api(path, { method: 'DELETE', headers: { 'If-Match': etag }, metadata: true });
+    if (path === previewPath && generation === previewLoadGeneration) {
+      previewSavedText = response.data; previewETag = response.etag;
+      if (previewText === submitted) { previewText = response.data; document.querySelector('#code-editor').value = response.data; }
+      persistPreviewDraft(); previewEditorMirrorDirty = true; refreshPreviewSearch(false);
+      document.querySelector('[data-action="save-preview"]').disabled = previewText === previewSavedText;
+    }
+    showToast('已恢复转换结果');
+  } catch (error) { showToast(error.message, true); }
+  finally { pendingPreviewWrites.delete(path); }
 }
 
 
@@ -2506,6 +2922,11 @@ function openDialog(dialog) {
   dialog.classList.remove('is-closing');
   lockDialogScroll();
   dialog.showModal();
+  if (dialog.id === 'settings-dialog') {
+    // Focus the dialog heading, not the first (sidebar) button on touch opening.
+    // Tab still reaches the controls with their normal focus-visible styling.
+    dialog.querySelector('#settings-dialog-title')?.focus({ preventScroll: true });
+  }
 }
 function closeDialog(dialog) {
   return new Promise(resolve => {
@@ -2601,8 +3022,6 @@ function showCopySuccess(button) {
   if (!button) return;
   if (!button.hasAttribute('data-copy-label')) button.dataset.copyLabel = button.innerHTML;
   clearTimeout(Number(button.dataset.copyTimer || 0));
-  button.classList.remove('copy-success');
-  void button.offsetWidth;
   setTemplateHTML(button, '<span class="symbol" data-symbol="checkmark"></span>拷贝成功');
   button.classList.add('copy-success');
   const timer = setTimeout(() => {
@@ -2623,7 +3042,8 @@ function highlightCode(text) {
     const sourceAttributes = ` data-source-start="${lineStart}" data-source-length="${line.length}"`;
     const trimmed = line.trim();
     if (/^\[[^\]]+\]$/.test(trimmed)) return `<span class="code-line code-section"${sourceAttributes}>${escapeHTML(line)}</span>`;
-    if (/^(#|\/\/|;)/.test(trimmed)) return `<span class="code-line code-comment"${sourceAttributes}>${escapeHTML(line)}</span>`;
+    if (/^#!/.test(trimmed)) return `<span class="code-line code-metadata"${sourceAttributes}>${highlightInlineCode(line)}</span>`;
+    if (/^(#|\/\/|;)/.test(trimmed)) return `<span class="code-line code-comment"${sourceAttributes}>${highlightInlineCode(line)}</span>`;
     const value = highlightInlineCode(line);
     return `<span class="code-line"${sourceAttributes}>${value || '<br>'}</span>`;
   }).join('');
@@ -2632,24 +3052,14 @@ function highlightCode(text) {
 function highlightInlineCode(line) {
   let output = '';
   let cursor = 0;
-  const keyMatch = line.match(/^([A-Za-z][A-Za-z0-9_-]*)(\s*=)/);
-  if (keyMatch) {
-    output += `<span class="code-key">${escapeHTML(keyMatch[1])}</span>${escapeHTML(keyMatch[2])}`;
-    cursor = keyMatch[0].length;
-  }
-
-  const tokenPattern = /(https?:\/\/[^\s,<>&]+)|\b(\d+(?:\.\d+)?)\b/g;
-  tokenPattern.lastIndex = cursor;
+  const tokenPattern = /https?:\/\/[^\s,"]+/g;
   let match;
   while ((match = tokenPattern.exec(line)) !== null) {
     output += escapeHTML(line.slice(cursor, match.index));
-    output += match[1]
-      ? `<span class="code-url">${escapeHTML(match[0])}</span>`
-      : `<span class="code-number">${escapeHTML(match[0])}</span>`;
+    output += `<span class="code-url">${escapeHTML(match[0])}</span>`;
     cursor = match.index + match[0].length;
   }
-  output += escapeHTML(line.slice(cursor));
-  return output;
+  return output + escapeHTML(line.slice(cursor));
 }
 
 function showToast(message, isError = false) {
@@ -2668,3 +3078,62 @@ function showToast(message, isError = false) {
 function formatDate(value, fallback = '—') { if (!value) return fallback; const date = new Date(value); if (Number.isNaN(date.valueOf())) return fallback; return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' }).format(date); }
 function escapeHTML(value) { return String(value ?? '').replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]); }
 function escapeAttribute(value) { return escapeHTML(value); }
+
+function editorKeywords(editor) {
+  const raw = editor.querySelector(`input[name="${editor.dataset.keywordEditor}"]`).value;
+  return editor.dataset.separator ? raw.split(editor.dataset.separator).map(value => value.trim()).filter(Boolean) : splitAirportKeywords(raw);
+}
+
+function pairedOptionsMarkup(group) {
+  const [first, second] = group.fields;
+  return `<div class="option-row" data-paired-editor data-first="${first.key}" data-second="${second.key}" data-first-label="${escapeAttribute(first.label)}" data-second-label="${escapeAttribute(second.label)}" data-first-prompt="${escapeAttribute(first.prompt)}" data-second-prompt="${escapeAttribute(second.prompt)}">
+    <input type="hidden" name="option_${first.key}"><input type="hidden" name="option_${second.key}">
+    <div data-paired-rows></div><button type="button" class="button" data-paired-add disabled>＋ 添加一组</button></div>`;
+}
+
+function appendPairedOption(editor, first = '', second = '') {
+  const row = document.createElement('div'); row.className = 'paired-option-row';
+  setTemplateHTML(row, `<label>${escapeHTML(editor.dataset.firstLabel)}<input type="text" data-pair-first placeholder="${escapeAttribute(editor.dataset.firstPrompt)}"></label><label>${escapeHTML(editor.dataset.secondLabel)}<input type="text" data-pair-second placeholder="${escapeAttribute(editor.dataset.secondPrompt)}"></label><button type="button" class="button" data-paired-remove aria-label="移除此组">−</button>`);
+  row.querySelector('[data-pair-first]').value = first;
+  row.querySelector('[data-pair-second]').value = second;
+  editor.querySelector('[data-paired-rows]').append(row);
+  updatePairedAddButton(editor);
+  return row;
+}
+
+function populatePairedOptions(editor) {
+  editor.querySelector('[data-paired-rows]').replaceChildren();
+  const read = key => { const value = editor.querySelector(`[name="option_${key}"]`).value; return value ? value.split('+') : []; };
+  const first = read(editor.dataset.first), second = read(editor.dataset.second);
+  for (let index = 0; index < Math.max(1, first.length, second.length); index++) appendPairedOption(editor, first[index] || '', second[index] || '');
+}
+
+function updatePairedAddButton(editor) {
+  editor.querySelector('[data-paired-add]').disabled = Array.from(editor.querySelectorAll('.paired-option-row')).some(row =>
+    !row.querySelector('[data-pair-first]').value.trim() || !row.querySelector('[data-pair-second]').value.trim());
+}
+
+function persistPairedOptions(editor) {
+  updatePairedAddButton(editor);
+  const rows = Array.from(editor.querySelectorAll('.paired-option-row')).map(row => [row.querySelector('[data-pair-first]').value, row.querySelector('[data-pair-second]').value]).filter(pair => pair.some(Boolean));
+  editor.querySelector(`[name="option_${editor.dataset.first}"]`).value = rows.map(pair => pair[0]).join('+');
+  editor.querySelector(`[name="option_${editor.dataset.second}"]`).value = rows.map(pair => pair[1]).join('+');
+}
+
+ui.advancedOptions.addEventListener('input', event => {
+  handleAirportKeywordInput(event);
+  const editor = event.target.closest('[data-paired-editor]');
+  if (editor) persistPairedOptions(editor);
+});
+ui.advancedOptions.addEventListener('keydown', handleAirportKeywordKeyDown);
+ui.advancedOptions.addEventListener('click', event => {
+  handleAirportKeywordClick(event);
+  const editor = event.target.closest('[data-paired-editor]');
+  if (!editor) return;
+  if (event.target.closest('[data-paired-add]') && !editor.querySelector('[data-paired-add]').disabled) appendPairedOption(editor).querySelector('input').focus();
+  if (event.target.closest('[data-paired-remove]')) {
+    event.target.closest('.paired-option-row').remove();
+    if (!editor.querySelector('.paired-option-row')) appendPairedOption(editor);
+    persistPairedOptions(editor);
+  }
+});

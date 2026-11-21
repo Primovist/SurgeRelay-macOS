@@ -11,6 +11,9 @@ enum WebManagementAPI {
     }
 
     static func response(for request: WebHTTPRequest, model: AppModel) async -> WebHTTPResponse {
+        if request.path == "/api/v1" || request.path.hasPrefix("/api/v1/") {
+            return await model.automationAPI.response(for: request, model: model)
+        }
         if !request.path.hasPrefix("/api/") {
             return assetResponse(for: request.path)
         }
@@ -167,13 +170,17 @@ enum WebManagementAPI {
             scriptHubModuleURL: model.settings.scriptHubModuleURL,
             automaticallyUpdateScriptHub: model.settings.automaticallyUpdateScriptHub,
             scriptHubRevision: model.upstreamState.revision,
+            scriptHubSourceURL: model.upstreamState.sourceURL,
             scriptHubLastCheckedAt: model.upstreamState.lastCheckedAt,
             scriptHubLastError: model.upstreamState.lastError,
             storageMode: model.settings.storageMode.rawValue,
+            localModuleDirectory: model.settings.localModuleDirectory,
             githubRepository: "https://github.com/\(model.settings.github.owner)/\(model.settings.github.repository)",
             githubTokenConfigured: !model.githubToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            githubToken: model.settings.githubToken,
             githubPublicBaseURL: model.settings.github.publicBaseURL,
             githubRepositoryIsPrivate: model.settings.github.repositoryIsPrivate,
+            publishLintIssues: model.publishLintIssues,
             updateHistory: Array(model.updateHistory.prefix(20)),
             appVersion: version,
             platforms: platformsDict
@@ -316,7 +323,8 @@ enum WebManagementAPI {
             switch request.method {
             case "PUT":
                 let mutation = try request.decodeBody(WebModuleMutation.self)
-                try await model.updateModule(id: id, from: mutation.draft(existing: module))
+                let draft = try mutation.draft(existing: module)
+                try await model.updateModule(id: id, from: draft)
                 return .json(ActionPayload(ok: true, message: model.statusMessage))
             case "DELETE":
                 await model.deleteModule(id: id)
@@ -339,16 +347,17 @@ enum WebManagementAPI {
             Task { await model.update(moduleID: id) }
             return .json(ActionPayload(ok: true, message: "已开始更新 \(module.name)。"), status: 202, reason: "Accepted")
         case ("GET", "preview"):
-            return .text(try await model.previewContent(for: module))
+            let content = try await model.previewContent(for: module)
+            return .text(content, headers: ["ETag": "\"" + Data(content.utf8).sha256String + "\"", "Cache-Control": "no-store"])
         case ("PUT", "preview"):
             guard let content = String(data: request.body, encoding: .utf8) else {
                 throw WebAPIError.invalidBody
             }
-            try await model.savePreviewContent(content, for: module)
-            return .json(ActionPayload(ok: true, message: model.statusMessage))
+            let saved = try await model.savePreviewContent(content, for: module, expectedETag: request.headers["if-match"])
+            return .json(PreviewSavedPayload(ok: true, message: model.statusMessage, content: saved, etag: "\"" + Data(saved.utf8).sha256String + "\""))
         case ("DELETE", "preview"):
-            let restored = try await model.restorePreviewContent(for: module)
-            return .text(restored)
+            let restored = try await model.restorePreviewContent(for: module, expectedETag: request.headers["if-match"])
+            return .text(restored, headers: ["ETag": "\"" + Data(restored.utf8).sha256String + "\""])
         case ("POST", "override-conflict"):
             await model.acceptOverrideConflict(moduleID: id)
             return .json(ActionPayload(ok: true, message: model.statusMessage))
@@ -525,6 +534,7 @@ enum WebManagementAPI {
             ),
             modules: model.modules.map { module in
                 WebModulePayload(
+                    refreshIntervalMinutes: module.refreshIntervalMinutes,
                     id: module.id.uuidString.lowercased(),
                     name: module.name,
                     sourceURL: module.sourceURL,
@@ -814,6 +824,7 @@ private struct WebCombinedPayload: Encodable {
 }
 
 private struct WebModulePayload: Encodable {
+    let refreshIntervalMinutes: Int?
     let id: String
     let name: String
     let sourceURL: String
@@ -864,13 +875,17 @@ private struct WebSettingsPayload: Encodable {
     let scriptHubModuleURL: String
     let automaticallyUpdateScriptHub: Bool
     let scriptHubRevision: String?
+    let scriptHubSourceURL: String?
     let scriptHubLastCheckedAt: Date?
     let scriptHubLastError: String?
     let storageMode: String
+    let localModuleDirectory: String
     let githubRepository: String
     let githubTokenConfigured: Bool
+    let githubToken: String
     let githubPublicBaseURL: String
     let githubRepositoryIsPrivate: Bool?
+    let publishLintIssues: [ModuleLintIssue]
     let updateHistory: [UpdateHistoryEntry]
     let appVersion: String
     let platforms: [String: Bool]
@@ -946,6 +961,7 @@ private struct WebArgumentsPayload: Encodable {
 }
 
 private struct WebModuleMutation: Decodable {
+    let refreshIntervalMinutes: Int?
     let name: String
     let sourceURL: String
     let sourceFormat: String?
@@ -961,6 +977,7 @@ private struct WebModuleMutation: Decodable {
 
     func draft(existing: RelayModule? = nil) throws -> ModuleDraft {
         var draft = existing.map(ModuleDraft.init(module:)) ?? ModuleDraft()
+        if let refreshIntervalMinutes { draft.refreshIntervalMinutes = refreshIntervalMinutes < 0 ? nil : refreshIntervalMinutes }
         draft.name = name
         draft.sourceURL = sourceURL
         if let sourceFormat {
@@ -1024,3 +1041,5 @@ private enum WebAPIError: LocalizedError {
         }
     }
 }
+
+private struct PreviewSavedPayload: Encodable { let ok: Bool; let message: String; let content: String; let etag: String }

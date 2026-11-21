@@ -29,6 +29,53 @@ struct AirportSubscriptionParserTests {
         #expect(entries.map(\.originalName) == ["Node A", "Node B"])
     }
 
+    @Test func decodesAnyTLSSubscriptionWithMissingPaddingAndWhitespace() throws {
+        let uri = "anytls://secret@example.com:443?sni=tls.example.com&insecure=1#香港%2001"
+        let encoded = Data(uri.utf8).base64EncodedString().replacingOccurrences(of: "=", with: "")
+        let wrapped = "\u{FEFF}  " + encoded.prefix(20) + "\r\n" + encoded.dropFirst(20) + "\n"
+        let entries = try AirportSubscriptionParser.proxyEntries(from: Data(wrapped.utf8))
+        #expect(entries.count == 1)
+        #expect(entries[0].originalName == "香港 01")
+        #expect(entries[0].definition == "anytls, \"example.com\", 443, password=\"secret\", sni=\"tls.example.com\", skip-cert-verify=true")
+    }
+
+    @Test func decodesURLSafeAndNestedBase64WithoutEqualsInDecodedText() throws {
+        let uri = "anytls://secret@example.com:443#节点😀"
+        let inner = Data(uri.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        for text in [inner, Data(inner.utf8).base64EncodedString()] {
+            let entries = try AirportSubscriptionParser.proxyEntries(from: Data(text.utf8))
+            #expect(entries.count == 1)
+            #expect(entries[0].originalName == "节点😀")
+        }
+    }
+
+    @Test func parsesPlainTrojanIPv6AndEscapesDecodedCredentials() throws {
+        let uri = "trojan://a%2Cb%22c%5Cd@[2001:db8::1]:443?insecure=0#Node%2C%3D%0AName"
+        let entries = try AirportSubscriptionParser.proxyEntries(from: Data(uri.utf8))
+        #expect(entries[0].definition.contains(#"password="a,b\"c\\d""#))
+        #expect(entries[0].definition.contains("skip-cert-verify=false"))
+        #expect(entries[0].originalName == "Node，＝ Name")
+    }
+
+    @Test func rejectsUnsupportedMalformedAndNonProxyContent() {
+        for text in [
+            "vless://secret@example.com:443?security=tls#Node",
+            "anytls://secret@example.com:0#Node",
+            "anytls://example.com:443#Node",
+            "anytls://secret@example.com:443?insecure=maybe",
+            "trojan://secret@example.com:443?type=grpc",
+            "anytls://secret%0Ainjected@example.com:443",
+            "<!DOCTYPE html><html>error=invalid token</html>",
+            "[General]\nloglevel = warning",
+        ] {
+            #expect(throws: (any Error).self) {
+                try AirportSubscriptionParser.proxyEntries(from: Data(text.utf8))
+            }
+        }
+    }
+
     @Test func filtersEnglishMetadataWithChineseAliases() {
         let pattern = #"^((?!(流量|重置|到期)).)*$"#
 
@@ -92,6 +139,95 @@ struct AirportSubscriptionParserTests {
         let optimization = AirportNodeNameOptimization(isEnabled: false)
 
         #expect(AirportSubscriptionParser.optimizedNodeName(original, using: optimization) == original)
+    }
+
+    @Test func smartCleanupRemovesRepeatedRegionsAndPreservesRates() {
+        let examples = [
+            ("香港 01 | 1x HK", "香港 01 | 1x"),
+            ("香港家宽 02｜2x HK", "香港家宽 02｜2x"),
+            ("台湾 03 | 3x TW", "台湾 03 | 3x"),
+            ("美国-纽约 01 ｜ 5x US", "美国-纽约 01 ｜ 5x"),
+            ("日本 01 | 0.5x JP", "日本 01 | 0.5x"),
+            ("新加坡 02 | 2× SG", "新加坡 02 | 2×"),
+            ("香港 01｜1x/2x/3x/5x", "香港 01｜1x/2x/3x/5x"),
+            ("香港 01 | HK | 2x", "香港 01 | HK | 2x"),
+            ("Hong Kong 01 | 1X hk", "Hong Kong 01 | 1X"),
+            ("HK 01 | 1x HK", "HK 01 | 1x"),
+            ("印度尼西亚 01 | 2倍 ID", "印度尼西亚 01 | 2倍"),
+            ("日本 01 | JP", "日本 01")
+        ]
+        let optimization = AirportNodeNameOptimization(removalTerms: "", smartCleanup: true)
+        for (input, expected) in examples {
+            #expect(AirportSubscriptionParser.optimizedNodeName(input, using: optimization) == expected)
+        }
+    }
+
+    @Test func smartCleanupCoversCompleteNodeList() throws {
+        struct Example: Decodable { let input: String; let expected: String }
+        let url = URL(filePath: #filePath).deletingLastPathComponent()
+            .appending(path: "Fixtures/airport-node-names.json")
+        let examples = try JSONDecoder().decode([Example].self, from: Data(contentsOf: url))
+        #expect(examples.count == 324)
+        #expect(examples.filter { $0.input != $0.expected }.count == 97)
+        let optimization = AirportNodeNameOptimization(removalTerms: "", smartCleanup: true)
+        for example in examples {
+            #expect(AirportSubscriptionParser.optimizedNodeName(example.input, using: optimization) == example.expected)
+        }
+    }
+
+    @Test func smartCleanupCoversSystemRegionsAndLocalizedNames() {
+        let optimization = AirportNodeNameOptimization(removalTerms: "", smartCleanup: true)
+        for region in Locale.Region.isoRegions where region.identifier.count == 2 {
+            for identifier in ["zh_Hans", "zh_Hant", "zh_Hant_HK", "en"] {
+                guard let name = Locale(identifier: identifier).localizedString(forRegionCode: region.identifier),
+                      name != region.identifier else { continue }
+                let original = "\(name) 02丨0.5x \(region.identifier)"
+                #expect(AirportSubscriptionParser.optimizedNodeName(original, using: optimization) == "\(name) 02丨0.5x")
+            }
+        }
+    }
+
+    @Test func smartCleanupPreservesMeaningfulAndAmbiguousContent() {
+        let examples = [
+            "香港家宽 01 IPLC 10Gbps", "香港 1x 专线 01", "香港 01 | US",
+            "印度尼西亚 01 | IN", "香港日本 01 | JP", "节点 01 | HK", "1x", "HK",
+            "LINK 01 | IN", "香港 X1 Pro 01", "巴西丨1x CR", "南非丨1x KE",
+            "刚果（金）丨1x CG", "多米尼克丨1x DO", "未知地区丨1x ZZ"
+        ]
+        let optimization = AirportNodeNameOptimization(removalTerms: "", smartCleanup: true)
+        for name in examples {
+            #expect(AirportSubscriptionParser.optimizedNodeName(name, using: optimization) == name)
+        }
+        let original = "香港 01 | 2x HK"
+        #expect(AirportSubscriptionParser.optimizedNodeName(original, using: .init()) == original)
+        #expect(AirportSubscriptionParser.optimizedNodeName(
+            original, using: .init(isEnabled: false, smartCleanup: true)
+        ) == original)
+    }
+
+    @Test func smartCleanupPersistsAndDefaultsOffForOlderSettings() throws {
+        let oldSettings = Data(#"{"isEnabled":true,"removesEmoji":false,"removalTerms":"IEPL"}"#.utf8)
+        let decoded = try JSONDecoder().decode(AirportNodeNameOptimization.self, from: oldSettings)
+        #expect(!decoded.smartCleanup)
+        #expect(!decoded.removesEmoji)
+        #expect(decoded.removalTerms == "IEPL")
+        let enabled = AirportNodeNameOptimization(smartCleanup: true)
+        let restored = try JSONDecoder().decode(AirportNodeNameOptimization.self, from: JSONEncoder().encode(enabled))
+        #expect(restored == enabled)
+    }
+
+    @Test func smartCleanupKeepsDistinctRatesAndAppliesBeforeTemplate() {
+        var subscription = AirportSubscription(name: "Example")
+        subscription.nodeNameOptimization.smartCleanup = true
+        subscription.nodeNameTemplate = "{airport} - {name}"
+        let entries = [
+            AirportProxyEntry(originalName: "香港 01 | 1x HK", definition: "ss, a.example, 443"),
+            AirportProxyEntry(originalName: "香港 01 | 2x HK", definition: "ss, b.example, 443")
+        ]
+        var usedNames = Set<String>()
+        let result = AirportSubscriptionParser.process(entries, for: subscription, reserving: &usedNames)
+        #expect(usedNames == ["example - 香港 01 | 1x", "example - 香港 01 | 2x"])
+        #expect(result.included.count == 2)
     }
 
     @Test func makesOptimizedDuplicateNamesUnique() {
@@ -219,5 +355,167 @@ struct AirportSubscriptionParserTests {
         #expect(result.included[0].definition.contains("tfo=true"))
         #expect(!result.included[0].definition.contains("skip-cert-verify"))
         #expect(result.included[1].definition.contains("skip-cert-verify=true"))
+    }
+}
+
+struct AirportSubscriptionDirectRulesTests {
+    private func subscription(_ url: String) -> AirportSubscription {
+        subscription("Airport", url)
+    }
+
+    private func subscription(_ name: String, _ url: String) -> AirportSubscription {
+        AirportSubscription(name: name, sourceURL: url)
+    }
+
+    @Test func extractsUniqueHostsWithoutTokensAndKeepsDisabledSubscriptions() {
+        var disabled = subscription("https://Sub.Example.com:8443/path?token=private")
+        disabled.isEnabled = false
+        let rules = AirportSubscriptionDirectRules.rules(for: [
+            disabled, subscription("https://sub.example.com/another"),
+            subscription("https://192.0.2.5/sub"), subscription("https://[2001:db8::5]/sub"),
+        ])
+        #expect(rules == ["DOMAIN-SUFFIX,sub.example.com,DIRECT", "IP-CIDR,192.0.2.5/32,DIRECT,no-resolve", "IP-CIDR6,2001:db8::5/128,DIRECT,no-resolve"])
+        #expect(!rules.joined().contains("private"))
+    }
+
+    @Test func includesEveryProxyServerHostAlongsideSubscriptionHosts() {
+        let entries = [
+            AirportProxyEntry(originalName: "HK", definition: "ss, hk.flowercloud.net, 443, password=secret"),
+            AirportProxyEntry(originalName: "API", definition: "anytls, \"api-flowercloud.com\", 443, password=secret"),
+            AirportProxyEntry(originalName: "IP", definition: "trojan, 192.0.2.8, 443, password=secret"),
+            AirportProxyEntry(originalName: "DIRECT", definition: "direct"),
+        ]
+        let rules = AirportSubscriptionDirectRules.rules(
+            for: [subscription("https://api-huacloud.dev/sub")],
+            proxyEntries: entries
+        )
+        #expect(rules == [
+            "DOMAIN-SUFFIX,api-flowercloud.com,DIRECT",
+            "DOMAIN-SUFFIX,api-huacloud.dev,DIRECT",
+            "DOMAIN-SUFFIX,hk.flowercloud.net,DIRECT",
+            "IP-CIDR,192.0.2.8/32,DIRECT,no-resolve",
+        ])
+    }
+
+    @Test func coversFlowerCloudAndImmTelecomSubscriptionAndNodeDomains() {
+        let subscriptions = [
+            subscription("FlowerCloud", "https://api-flowercloud.com/sub"),
+            subscription("ImmTelecom", "https://api-huacloud.dev/sub"),
+        ]
+        let entries = [
+            AirportProxyEntry(originalName: "Flower", definition: "ss, flowercloud.net, 443"),
+            AirportProxyEntry(originalName: "Hua", definition: "trojan, api-huacloud.com, 443"),
+            AirportProxyEntry(originalName: "CDN", definition: "anytls, xmancdn.com, 443"),
+            AirportProxyEntry(originalName: "Agent", definition: "https, aws-agent.com, 443"),
+            AirportProxyEntry(originalName: "Imm 1", definition: "socks5, pz970qdiyh.sbs, 443"),
+            AirportProxyEntry(originalName: "Imm 2", definition: "hysteria2, fau7rbjl64.sbs, 443"),
+        ]
+
+        #expect(Set(AirportSubscriptionDirectRules.rules(
+            for: subscriptions,
+            proxyEntries: entries
+        )) == Set([
+            "DOMAIN-SUFFIX,flowercloud.net,DIRECT",
+            "DOMAIN-SUFFIX,api-flowercloud.com,DIRECT",
+            "DOMAIN-SUFFIX,api-huacloud.com,DIRECT",
+            "DOMAIN-SUFFIX,api-huacloud.dev,DIRECT",
+            "DOMAIN-SUFFIX,xmancdn.com,DIRECT",
+            "DOMAIN-SUFFIX,aws-agent.com,DIRECT",
+            "DOMAIN-SUFFIX,pz970qdiyh.sbs,DIRECT",
+            "DOMAIN-SUFFIX,fau7rbjl64.sbs,DIRECT",
+        ]))
+    }
+
+    @Test func replacesLegacyAirportGroupsAndDeduplicatesWithoutTouchingOtherRules() throws {
+        let source = """
+        [Proxy]
+        Node = direct
+        [Rule]
+        # 直连策略 FlowerCloud
+        DOMAIN-SUFFIX,flowercloud.net,DIRECT
+        DOMAIN-SUFFIX,api-flowercloud.com,DIRECT
+        DOMAIN-SUFFIX,aws-agent.com,DIRECT
+        # 直连策略 ImmTelecom
+        DOMAIN-SUFFIX,pz970qdiyh.sbs,DIRECT
+        DOMAIN-SUFFIX,fau7rbjl64.sbs,DIRECT
+        # Other rules
+        DOMAIN,sub.example.com,DIRECT
+        DOMAIN,sub.example.com,DIRECT
+        DOMAIN-SUFFIX,stun.playstation.net,DIRECT
+        DOMAIN-SUFFIX,myhome,DEVICE:MACMINI
+        FINAL,Proxy
+        [Host]
+        localhost = 127.0.0.1
+        """
+        let subscriptions = [subscription("FlowerCloud", "https://new.example.com/sub"), subscription("ImmTelecom", "https://sub.example.com/sub")]
+        let updated = try AirportSubscriptionDirectRules.updating(source, subscriptions: subscriptions)
+        #expect(updated.contains("[Rule]\n# >>> Surge Relay 机场订阅直连\n"))
+        #expect(!updated.contains("flowercloud.net"))
+        #expect(!updated.contains("pz970qdiyh.sbs"))
+        #expect(!updated.contains("# 直连策略"))
+        #expect(updated.components(separatedBy: "sub.example.com,DIRECT").count == 2)
+        #expect(updated.contains("DOMAIN-SUFFIX,stun.playstation.net,DIRECT\nDOMAIN-SUFFIX,myhome,DEVICE:MACMINI\nFINAL,Proxy\n[Host]\nlocalhost = 127.0.0.1"))
+        #expect(try AirportSubscriptionDirectRules.updating(updated, subscriptions: subscriptions) == updated)
+    }
+
+    @Test func updatesChangedURLsAndRemovesDeletedSubscriptionRules() throws {
+        let original = "[Rule]\r\nFINAL,Proxy\r\n"
+        let first = try AirportSubscriptionDirectRules.updating(original, subscriptions: [subscription("https://old.example/sub")])
+        let next = try AirportSubscriptionDirectRules.updating(first, subscriptions: [subscription("https://new.example/sub")])
+        #expect(!next.contains("old.example"))
+        #expect(next.contains("DOMAIN-SUFFIX,new.example,DIRECT\r\n"))
+        #expect(try AirportSubscriptionDirectRules.updating(next, subscriptions: []) == original)
+    }
+
+    @Test func insertsMissingRuleSectionAndMovesManagedRulesAboveFinal() throws {
+        let subscription = subscription("https://example.com/sub")
+        let missing = try AirportSubscriptionDirectRules.updating("[General]\nloglevel = warning\n", subscriptions: [subscription])
+        #expect(missing.contains("[Rule]\n# >>> Surge Relay 机场订阅直连"))
+        let misplaced = "[Rule]\nFINAL,Proxy\n" + AirportSubscriptionDirectRules.block(for: [subscription]) + "\n"
+        let updated = try AirportSubscriptionDirectRules.updating(misplaced, subscriptions: [subscription])
+        #expect(updated.range(of: "DOMAIN-SUFFIX,example.com,DIRECT")!.lowerBound < updated.range(of: "FINAL")!.lowerBound)
+    }
+
+    @Test func refusesBrokenOrCrossSectionMarkers() {
+        for source in [
+            "[Rule]\n# >>> Surge Relay 机场订阅直连\nFINAL,Proxy",
+            "[Rule]\n# >>> Surge Relay 机场订阅直连\n[Host]\n# <<< Surge Relay 机场订阅直连",
+            "[Rule]\n# <<< Surge Relay 机场订阅直连\n# >>> Surge Relay 机场订阅直连",
+        ] {
+            #expect(throws: (any Error).self) {
+                try AirportSubscriptionDirectRules.updating(source, subscriptions: [subscription("https://example.com")])
+            }
+        }
+    }
+}
+
+struct AirportPolicyFileStoreTests {
+    @Test func producesReadableLocalNames() {
+        let subscription = AirportSubscription(
+            id: UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA")!,
+            name: "Flower/Cloud"
+        )
+        #expect(AirportPolicyFileStore.fileNames(for: [subscription])[subscription.id] == "Flower-Cloud.proxies")
+    }
+
+    @Test func localWriterCleansOnlyOwnedObsoletePolicyFiles() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = directory.appending(path: "Gateway.conf")
+        try Data().write(to: profile)
+        try Data("# Generated by Surge Relay; subscription-id=old\n".utf8)
+            .write(to: directory.appending(path: "Old.proxies.txt"))
+        try Data("user content\n".utf8).write(to: directory.appending(path: "User.proxies"))
+
+        try AirportPolicyFileStore.write(
+            files: ["FlowerCloud.proxies": "# Generated by Surge Relay; subscription-id=new\nNode = direct\n"],
+            beside: profile
+        )
+
+        #expect(FileManager.default.fileExists(atPath: directory.appending(path: "FlowerCloud.proxies").path))
+        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "Old.proxies.txt").path))
+        #expect(FileManager.default.fileExists(atPath: directory.appending(path: "User.proxies").path))
     }
 }

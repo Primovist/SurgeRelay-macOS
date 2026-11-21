@@ -1,100 +1,113 @@
-# Surge Relay (macOS)
+<div align="center">
+  <img src="SurgeRelay/WebResources/app-icon.png" width="112" alt="Surge Relay 图标">
+  <h1>Surge Relay</h1>
+  <p>在 Mac 上管理 Surge 模块和机场订阅。</p>
+  <p>
+    <a href="https://github.com/EEliberto/SurgeRelay-macOS/releases/latest"><strong>下载 Surge Relay</strong></a>
+    &nbsp;·&nbsp;
+    <a href="CHANGELOG.md">更新日志</a>
+    &nbsp;·&nbsp;
+    <a href="docs/Automation.md">自动化访问</a>
+  </p>
+  <p><sub>需要 macOS 26 或更高版本，以及搭载 Apple 芯片的 Mac。</sub></p>
+</div>
 
 <p align="center">
-  <img width="160" alt="Surge Relay Icon" src="https://github.com/user-attachments/assets/af9622ea-5c92-46e8-969d-27de2599f41d"
-" />
+  <a href="docs/images/module-overview.png"><img width="920" alt="Surge Relay 主窗口：按平台选择汇总模块的来源" src="docs/images/module-overview.png"></a>
 </p>
 
+## 开始使用
 
 <p align="center">
   一款用于集中管理、转换、编辑和发布 Surge 模块与机场节点的 macOS 应用程序。
 </p>
 
+使用 GitHub 与 Cloudflare 时，请参阅[配置指南](docs/GitHub-Cloudflare-Guide.md)。
+
+## 管理模块
+
+Surge Relay 可读取 Surge 模块，并通过内置的 [Script Hub](https://github.com/Script-Hub-Org) 引擎转换 Loon 插件和 Quantumult X 重写。转换在 Mac 上完成。
+
+选择一个来源模块后，可以查看来源地址、刷新状态及可用参数。点按“编辑”可更改名称、来源格式、刷新间隔和转换选项。刷新间隔选择“自动”时，使用通用设置中的间隔。
+
 <p align="center">
-  基于 <a href="https://github.com/Script-Hub-Org">Script-Hub</a> 的本地转换能力构建。
+  <a href="docs/images/module-editor.png"><img width="920" alt="编辑模块的名称、来源和刷新间隔" src="docs/images/module-editor.png"></a>
 </p>
 
-Surge Relay 适合需要同时维护大量 Surge 模块的用户，尤其是经常通过 Script-Hub 将 Loon、Quantumult X 或其他代理工具格式转换为 Surge `.sgmodule` 的场景。
-
-它的目标是将模块转换、地址维护、规则编辑和多设备同步集中到一台 Mac 上完成。你只需要在 Surge Relay 中维护上游地址和转换规则，最终生成的 Surge 模块会被发布到稳定的分发地址，所有设备只需要订阅这些固定 URL。
-
-## 预览
-
 <p align="center">
-  <img width="760" alt="Surge Relay Preview" src="https://github.com/user-attachments/assets/aee0f362-146d-4bbf-9069-b6fda1f8f886" />
+  <a href="docs/images/module-arguments.png"><img width="920" alt="在模块详情中调整脚本参数" src="docs/images/module-arguments.png"></a>
 </p>
 
-## 特性
-
-### 1. 集中化模块管理
-
-在传统流程中，如果上游作者修改了仓库地址、文件路径或目录结构，用户通常需要重新打开 Script-Hub，重新转换模块，再重新安装到 Surge。
-
-对于拥有多台设备的用户来说，这个过程需要在每台设备上重复操作。即便通过 iCloud 同步，也依然需要多次点击安装，维护成本很高。
-
-Surge Relay 将这些流程集中到一台 Mac 上完成。你只需要在 App 中维护上游地址、备用地址和转换规则，Surge 设备端无需关心原始模块来源。
+在“预览”中可以搜索和编辑生成的内容。写入的自定义修改会在后续处理中保留；如果上游变更与修改冲突，请检查提示和当前内容。
 
 <p align="center">
-  <img width="375" alt="Surge Relay Module Editor" src="https://github.com/user-attachments/assets/444cbc3d-d4b8-4047-a569-607692123503" />
-  <img width="375" alt="Surge Relay Remote Management" src="https://github.com/user-attachments/assets/83509a1d-e505-4c28-b1c1-cdf6e9d80870" />
+  <a href="docs/images/module-preview.png"><img width="920" alt="模块正文预览，按元数据、配置段和链接显示不同颜色" src="docs/images/module-preview.png"></a>
 </p>
 
-### 2. 稳定的模块分发地址
+## 管理机场订阅
 
-Surge Relay 会将处理后的 Surge `.sgmodule` 文件发布到私有 GitHub 仓库，并通过 Cloudflare 提供稳定地址；也可以保存到本地 iCloud Drive 目录。所有 iPhone、iPad、Apple TV 和 Mac 上的 Surge App 只需要订阅这些固定 URL。
+选择侧栏中的“订阅汇总”，添加机场名称和订阅链接。添加 Surge 配置后，开启需要写入的配置，并点按“写入配置”。
 
-即使上游模块地址发生变化，你也只需要在 Surge Relay 中修改一次。设备端的订阅地址保持不变，不需要重新安装模块，也不需要逐台修改配置。
+每个机场的节点保存在目标配置旁的独立 `.proxies` 文件中，主配置通过 `policy-path` 引用。订阅地址、重定向地址和节点服务器对应的直连规则会一并维护。
+
+在“编辑机场”中，可以按关键词或正则表达式筛选节点、调整排序、设置名称模板，以及修改 UDP Relay、TCP Fast Open 等代理属性。代理属性选择“自动”时保留订阅原值。
 
 <p align="center">
-  <img width="375" alt="image" src="https://github.com/user-attachments/assets/66c7c16a-f82c-4a55-b640-c5fcefb3cf99" />
-  <img width="375" alt="image" src="https://github.com/user-attachments/assets/6bb34ca7-c4c3-43b3-9b48-284eeeda8f65" />
+  <a href="docs/images/airport-overview.png"><img width="920" alt="机场订阅列表、Surge 配置和写入入口" src="docs/images/airport-overview.png"></a>
 </p>
 
-
-### 3. 本地转换与自动发布
-
-Surge Relay 运行在你的 Mac 上，负责拉取上游模块、调用 Script-Hub 的本地转换逻辑、应用自定义规则，并生成最终可用的 Surge 模块。
-
-生成后的模块可以自动发布到私有 GitHub 仓库并搭配 Cloudflare，或保存到 iCloud Drive (推荐)。为避免公开仓库被批量滥用，Surge Relay 不允许将公开仓库用作同步目标。Mac 只负责构建和发布，用户设备读取的是已经发布好的稳定文件。因此，即使 Mac 关机或暂时无法连接，已经发布的模块仍然可以正常使用。
-
-#### Github 和 Cloudflare Worker 配置教程
-
-- [从零配置 GitHub 私有仓库与 Cloudflare Worker](docs/GitHub-Cloudflare-Guide.md) — 面向新手的图文教程，包含 Token 权限、Worker 配置、验证方法和常见错误。
-- 你可以使用 AI 工具，例如 Claude Code 或 Codex 进行一键部署。如果你觉得操作过于繁琐，建议直接使用 iCloud 同步模式，无需此步骤 (最推荐🌟)。
-
-### 4. 可视化编辑与规则控制
-
-Surge Relay 提供图形化界面，用于查看和编辑模块内容。
-
-你可以集中管理模块地址、删除不需要的模块、屏蔽指定 MITM hostname、禁用部分 Script 或 Rewrite 规则，并对模块参数进行可视化调整。
-
-相比手动编辑 `.sgmodule` 文件，Surge Relay 更适合长期维护大量模块。
-
 <p align="center">
-  <img width="375" alt="Surge Relay Module Editor" src="https://github.com/user-attachments/assets/236a7812-5c2e-48d2-8f49-cb12464cdf12" />
-  <img width="375" alt="Surge Relay Remote Management" src="https://github.com/user-attachments/assets/3d56e0c6-690c-4d09-9362-7bdab7c2b2fe" />
+  <a href="docs/images/airport-options.png"><img width="920" alt="编辑机场的代理属性、名称模板和移除关键词" src="docs/images/airport-options.png"></a>
 </p>
 
-### 5. Web 端远程管理
+## 选择同步方式
 
-除了 macOS 原生 App，Surge Relay 也支持 Web 端远程管理。你可以通过浏览器查看模块状态、检查同步结果、调试转换问题，或远程修改模块配置。
+在“设置”>“同步”中选择以下一种方式：
 
-配合 Surge Ponte 功能，即使不在 Mac 旁边，也可以从你的任意一台设备访问 Surge Relay，完成状态查看、调试和编辑等操作。
+- **iCloud 云盘**：将生成的模块保存到 Surge 文件夹，通过 iCloud 同步。请确保其他设备已启用 iCloud 云盘，并等待文件下载完成。
+- **GitHub 私有仓库**：将模块和生成的脚本发布到私有仓库，通过 Cloudflare Worker 提供订阅地址。完成配置后，在 Surge 中添加对应的固定 URL。
 
 <p align="center">
-  <img width="62%" alt="image" src="https://github.com/user-attachments/assets/294ea6e5-4791-48bb-9e78-b0a2527eee32" />
-  <img width="24%" alt="image" src="https://github.com/user-attachments/assets/b0e782bb-984d-43ec-9af3-6820f4308b21" />
+  <a href="docs/images/sync-icloud.png"><img width="920" alt="iCloud 云盘同步设置" src="docs/images/sync-icloud.png"></a>
 </p>
 
-### 6. 多设备自动同步
+<p align="center">
+  <a href="docs/images/sync-github.png"><img width="920" alt="GitHub 私有仓库与 Cloudflare 发布设置" src="docs/images/sync-github.png"></a>
+</p>
 
-所有设备只需要订阅 Surge Relay 发布后的固定模块地址。后续模块更新、上游地址修复、MITM 调整、规则禁用等操作，都可以在 Surge Relay 中统一完成。
+发布后的文件可继续被设备读取。Mac 离线期间不会获取或转换新的上游内容；重新上线后，可手动刷新或等待下一次自动刷新。
 
-当新的模块文件发布后，设备端会随着 Surge 的模块更新机制自动同步，避免重复配置和手动迁移。
+## 在 Surge 中使用汇总模块
+
+Surge Relay 分别生成适用于 iOS 和 iPadOS、macOS、tvOS、visionOS 的汇总模块。不同平台可以启用不同的来源。请在设备上安装对应平台的模块，并在 Surge 中启用。
 
 <p align="center">
-  <img width="62%" alt="Surge Relay Landscape Preview" src="https://github.com/user-attachments/assets/7dcee1b6-e2cf-4cee-9a20-293b075bf67b" />
-  <img width="24%" alt="Surge Relay Portrait Preview" src="https://github.com/user-attachments/assets/b7e8040a-7dfa-4dd0-bbba-89446e933ea1" />
+  <a href="docs/images/surge-macos.png"><img width="68%" align="middle" alt="在 Surge Mac 的模块设置中启用 macOS 汇总模块" src="docs/images/surge-macos.png"></a>
+  <a href="docs/images/surge-iphone.png"><img width="28%" align="middle" alt="在 Surge iPhone 中启用 iOS 和 iPadOS 汇总模块" src="docs/images/surge-iphone.png"></a>
+</p>
+
+## 服务器与客户端模式
+
+在“设置”>“Surge Ponte”中选择这台 Mac 的用途：
+
+- **服务器模式**：在这台 Mac 上保存来源配置、获取订阅、执行转换和发布。服务器需要保持运行，可以关闭主窗口并通过菜单栏使用。
+- **客户端模式**：连接另一台运行 Surge Relay 的 Mac，查看和管理服务器上的模块与机场订阅。输入服务器的 Surge Ponte 地址后，点按“测试连接”。
+
+使用客户端前，请在服务器上开启 Web 管理，并确保客户端可以通过 Surge Ponte 访问该地址。客户端不再开启另一套 Web 服务。
+
+<p align="center">
+  <a href="docs/images/ponte-client.png"><img width="920" alt="Surge Ponte 设置中的服务器模式和客户端模式切换，以及服务器地址输入框" src="docs/images/ponte-client.png"></a>
+</p>
+
+## 使用 Web 管理
+
+在服务器的“设置”>“Web 管理”中开启服务，然后在浏览器中打开显示的地址。同一网络中的设备可使用 Bonjour 地址；通过 Surge Ponte 连接时，使用服务器的 Ponte 地址及 Web 管理端口。
+
+Web 界面支持模块与机场编辑、正文预览、刷新和设置管理，适用于 Mac、iPad 和 iPhone 的浏览器。
+
+<p align="center">
+  <a href="docs/images/web-ipad.png"><img width="68%" align="middle" alt="iPad Safari 中的 Surge Relay Web 管理界面" src="docs/images/web-ipad.png"></a>
+  <a href="docs/images/web-iphone.png"><img width="28%" align="middle" alt="iPhone Safari 中的 Surge Relay Web 管理界面" src="docs/images/web-iphone.png"></a>
 </p>
 
 ### 7. 机场订阅的两种输出方式
@@ -123,30 +136,43 @@ airports/*.proxies
 ## 如果遇到“App 已损坏，无法打开，你应将其移到废纸篓”
 此提示并不代表 App 真的损坏。只是因为没有经过 Apple 付费公证，macOS 自动加上了“隔离”标记。
 
-请按照以下提示操作：
+在服务器的“设置”>“Web 管理”中开启“允许本机 Agent 访问”，拷贝访问令牌，并选择允许的操作。外部工具可通过 REST API 或 MCP 查询状态、搜索配置、预览修改，以及执行刷新和发布。
 
-1.打开“终端”(“访达”>“应用程序”>“实用工具”>“终端”)。
+默认只允许读取。修改会先生成预览，应用前检查内容是否已经变化。具体配置和调用示例见[自动化访问](docs/Automation.md)。
 
-2.拷贝并粘贴至终端如下命令后按 Return (回车) 键：
+## 如果 Mac 无法打开 Surge Relay
+
+如果系统提示 App 已损坏或无法验证开发者，请先确认安装包来自本仓库的 Releases 页面。确认后，可打开“终端”App，输入以下命令并按下 Return 键：
 
 ```bash
-  sudo xattr -rd com.apple.quarantine /Applications/Surge\ Relay.app
+sudo xattr -rd com.apple.quarantine "/Applications/Surge Relay.app"
 ```
 
-3.输入 Mac 的开机密码 (输入时不会显示任何字符) 后按 Return (回车) 键。
+输入 Mac 登录密码后，再次打开 Surge Relay。输入密码时，“终端”不会显示字符。
 
-4.重新打开 Surge Relay，即可正常使用。
+## 从源码构建
 
-## 声明
+使用 Xcode 打开 `Surge Relay.xcodeproj`，选择 `Surge Relay` scheme 后运行。项目使用 Swift 6 和 SwiftUI；首次构建需要下载 Sparkle 依赖。
 
 本仓库 fork 自 [EEliberto/SurgeRelay-macOS](https://github.com/EEliberto/SurgeRelay-macOS)。原项目版权、许可证、第三方声明与署名继续保留，详见 [LICENSE](LICENSE) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 本项目展示页面中的模块、模块名称、作者名称及相关来源，仅用于说明 Surge Relay 的模块管理、转换、汇总和分发能力，不代表本项目对任何模块内容、使用方式、适用场景或安全性的推荐、背书、指导或保证。
 
-示例中展示的模块来源可能包括但不限于：Surge Relay、@小白脸、@xream、@keywos、@ckyb、Ethan、[RuCu6](https://github.com/RuCu6)、[Maasea](https://github.com/Maasea)、[fmz200](https://github.com/fmz200)、[kelv1n1n](https://github.com/kelv1n1n)、[可莉🅥](https://github.com/luestr/ProxyResource/blob/main/README.md)、[zmqcherish](https://github.com/zmqcherish)、[VirgilClyne](https://github.com/VirgilClyne)、[zirawell](https://github.com/zirawell)、wish、奶思等。
+```sh
+xcodegen generate
+```
 
-所有模块的版权、署名、许可协议和使用限制均归原作者或原项目所有。Surge Relay 仅提供本地化的模块管理、转换、编辑和发布工具能力。用户在使用、转换、编辑、分发或订阅相关模块前，应自行确认对应模块的来源、许可、用途、风险和合规性。
+<details>
+  <summary>模块来源与使用声明</summary>
+  <br>
+  Surge Relay 仅提供模块管理、转换、编辑和发布功能。README 中出现的模块、作者和来源仅用于展示产品能力，不代表推荐、背书或安全保证。模块的版权、署名、许可协议和使用限制均归原作者或原项目所有。使用、转换、编辑、分发或订阅模块前，请确认相应来源、许可、用途和风险。
+  <br><br>
+  示例可能包含 Surge Relay、@小白脸、@xream、@keywos、@ckyb、Ethan、<a href="https://github.com/RuCu6">RuCu6</a>、<a href="https://github.com/Maasea">Maasea</a>、<a href="https://github.com/fmz200">fmz200</a>、<a href="https://github.com/kelv1n1n">kelv1n1n</a>、<a href="https://github.com/luestr/ProxyResource/blob/main/README.md">可莉</a>、<a href="https://github.com/zmqcherish">zmqcherish</a>、<a href="https://github.com/VirgilClyne">VirgilClyne</a>、<a href="https://github.com/zirawell">zirawell</a>、wish 和奶思等来源。
+</details>
 
-## 反馈
+<br>
 
-如果你有任何问题，请在 Github 提交 Issue。
+<div align="center">
+  <p><a href="https://github.com/EEliberto/SurgeRelay-macOS/issues">报告问题</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="LICENSE">Apache License 2.0</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="THIRD_PARTY_NOTICES.md">第三方软件声明</a></p>
+  <sub>Surge Relay 与 Surge、Apple、GitHub、Cloudflare 及文中提及的模块项目无隶属关系。相关名称和商标归各自所有者所有。</sub>
+</div>

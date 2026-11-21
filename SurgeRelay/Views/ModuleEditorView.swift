@@ -23,23 +23,24 @@ struct ModuleEditorView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(module == nil ? "添加模块" : "编辑模块").font(.title2.bold())
-                    Text("原始地址可以随时修改，已发布的稳定地址不会改变。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-            .padding(24)
-
-            Divider()
-
+        RelaySheet(title: module == nil ? "添加模块" : "编辑模块") {
             Form {
                 Section("基本信息") {
-                    TextField("显示名称", text: $draft.name, prompt: Text("例如：YouTube 去广告"))
+                    RelayTextField("显示名称", text: $draft.name, prompt: Text("例如：YouTube 去广告")).multilineTextAlignment(.leading)
                     Toggle("包含在总模块中", isOn: $draft.isEnabled)
+                }
+                Section("刷新") {
+                    Picker("刷新间隔", selection: Binding(
+                        get: { draft.refreshIntervalMinutes ?? -1 },
+                        set: { draft.refreshIntervalMinutes = $0 < 0 ? nil : $0 }
+                    )) {
+                        Text("自动").tag(-1)
+                        Text("仅手动刷新").tag(0)
+                        Text("每 15 分钟").tag(15)
+                        Text("每小时").tag(60)
+                        Text("每 6 小时").tag(360)
+                        Text("每天").tag(1440)
+                    }
                 }
                 Section("来源") {
                     URLInputField(title: "原始地址", text: $draft.sourceURL, prompt: "https://example.com/module.plugin")
@@ -72,7 +73,7 @@ struct ModuleEditorView: View {
                             )
                             .font(.callout)
                             .foregroundStyle(.secondary)
-                            .padding(.vertical, 10)
+                            .padding(.bottom, 10)
                         } else {
                             ScriptHubAdvancedOptionsView(options: $draft.scriptHubOptions)
                         }
@@ -81,22 +82,20 @@ struct ModuleEditorView: View {
                     Text("Loon 与 Quantumult X 来源可在这里使用 Script‑Hub 原有的转换控制。")
                 }
             }
-            .formStyle(.grouped)
+            .relaySheetForm()
             .onChange(of: draft.sourceURL) { _, newValue in
                 autofillName(from: newValue)
             }
 
-            Divider()
-            HStack {
-                Button("取消", role: .cancel) { dismiss() }
-                Spacer()
-                Button(module == nil ? "添加" : "保存") { save() }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-            }
-            .padding(20)
+        } actions: {
+            Spacer()
+            Button("取消", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+            Button(module == nil ? "添加" : "保存") { save() }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
         }
-        .frame(width: 620, height: 640)
+        .onDisappear { nameLookup?.cancel() }
+        .frame(width: 620, height: 680)
         .alert("无法保存", isPresented: Binding(
             get: { localError != nil },
             set: { if !$0 { localError = nil } }

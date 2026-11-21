@@ -842,6 +842,9 @@ private final class SourceRevisionURLProtocol: URLProtocol, @unchecked Sendable 
 
 private final class GitHubPublishURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var expectedBlobSHA = ""
+    nonisolated(unsafe) static let expectedManifestSHA = Data(
+        #"{"paths":["Surge-Relay.sgmodule"],"version":1}"#.utf8
+    ).gitBlobSHA1
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

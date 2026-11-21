@@ -1,45 +1,6 @@
 import AppKit
 import SwiftUI
 
-private struct ModuleNavigationButtons: View {
-    let canGoBack: Bool
-    let canGoForward: Bool
-    let goBack: () -> Void
-    let goForward: () -> Void
-
-    var body: some View {
-        HStack(spacing: 0) {
-            navigationButton(systemImage: "chevron.left", isEnabled: canGoBack, action: goBack)
-
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor).opacity(0.22))
-                .frame(width: 1, height: 17)
-
-            navigationButton(systemImage: "chevron.right", isEnabled: canGoForward, action: goForward)
-        }
-        .frame(width: 72, height: 32)
-        .glassEffect(.regular, in: Capsule())
-    }
-
-    private func navigationButton(
-        systemImage: String,
-        isEnabled: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 17, weight: .medium))
-                .frame(width: 35, height: 32)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(isEnabled ? Color.primary.opacity(0.72) : Color.secondary.opacity(0.28))
-        .disabled(!isEnabled)
-    }
-}
-
-
-
 struct ModulesView: View {
     @Environment(AppModel.self) private var model
     @State private var searchText = ""
@@ -314,7 +275,7 @@ struct ModulesView: View {
 
                 Section("来源模块") {
                     if filteredModules.isEmpty {
-                        sourceModulesEmptyState
+                        if !model.modules.isEmpty { sourceModulesEmptyState }
                     } else if searchText.isEmpty {
                         ForEach(model.modules) { module in
                             moduleRow(module)
@@ -399,15 +360,13 @@ struct ModulesView: View {
             }
             .toolbar {
                 if selectionKind != nil {
-                    ToolbarItem(placement: .navigation) {
-                        ModuleNavigationButtons(
-                            canGoBack: !backStack.isEmpty,
-                            canGoForward: !forwardStack.isEmpty,
-                            goBack: goBack,
-                            goForward: goForward
-                        )
-                    }
-                    .sharedBackgroundVisibility(.hidden)
+                    RelayNavigationToolbar(
+                        canGoBack: !backStack.isEmpty,
+                        canGoForward: !forwardStack.isEmpty,
+                        goBack: goBack,
+                        goForward: goForward,
+                        isSidebarVisible: columnVisibility != .detailOnly
+                    )
                 }
                 ToolbarSpacer(.flexible)
                 if selectionKind != nil,
@@ -525,7 +484,7 @@ struct ModulesView: View {
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
 
-            TextField("搜索", text: $searchText)
+            TextField("搜索", text: $searchText).multilineTextAlignment(.leading)
                 .textFieldStyle(.plain)
                 .font(.callout)
                 .lineLimit(1)
@@ -902,7 +861,7 @@ private struct ModuleDetailView: View {
                         .onTapGesture {
                             onEditIcon()
                         }
-                        .help("点击修改图标")
+                        .help("点按修改图标")
                     VStack(alignment: .leading, spacing: 4) {
                         Text(module.name)
                             .font(.title3.bold())
@@ -1139,7 +1098,7 @@ private struct ModuleDetailView: View {
             ))
             .toggleStyle(.switch)
         } else {
-            LabeledContent(definition.key) {
+            RelayInputRow(title: definition.key) {
                 TextField(
                     "",
                     text: Binding(
@@ -1149,10 +1108,10 @@ private struct ModuleDetailView: View {
                         }
                     ),
                     prompt: Text(definition.defaultValue)
-                )
+                ).multilineTextAlignment(.leading)
                 .labelsHidden()
                 .textFieldStyle(.roundedBorder)
-                .multilineTextAlignment(.trailing)
+                .multilineTextAlignment(.leading)
                 .frame(minWidth: 180)
             }
             .help("默认值：\(definition.defaultValue)；当前值：\(value)")
@@ -1249,22 +1208,7 @@ struct IconEditorView: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(navigationTitle)
-                        .font(.title2.bold())
-                    Text(supportsAppStoreSearch ? "手动输入图片链接，或从 App Store 搜索并选择图标。" : "汇总图标仅支持手动导入图片链接。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                iconPreview
-            }
-            .padding(24)
-
-            Divider()
-
+        RelaySheet(title: navigationTitle, titleInset: 34) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     manualIconSection
@@ -1284,33 +1228,29 @@ struct IconEditorView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            Divider()
-
-            HStack {
-                Button("取消", role: .cancel) { dismiss() }
-                Spacer()
-                if hasCustomIcon {
-                    Button(role: .destructive) {
-                        pendingIconURL = nil
-                        selectedIconURL = nil
-                        pendingIconSource = .manual
-                        hasPendingIconSelection = true
-                    } label: {
-                        Label("恢复默认图标", systemImage: "arrow.counterclockwise")
-                    }
-                    .buttonStyle(.bordered)
+            .scrollEdgeEffectHidden()
+        } actions: {
+            if hasCustomIcon {
+                Button(role: .destructive) {
+                    pendingIconURL = nil
+                    selectedIconURL = nil
+                    pendingIconSource = .manual
+                    hasPendingIconSelection = true
+                } label: {
+                    Label("恢复默认图标", systemImage: "arrow.counterclockwise")
                 }
-                Button("完成") {
-                    if pendingIconURL != currentCustomIconURL {
-                        saveIcon(pendingIconURL, source: pendingIconSource)
-                    } else {
-                        dismiss()
-                    }
-                }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
             }
-            .padding(20)
+            Spacer()
+            Button("取消", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+            Button("完成") {
+                if pendingIconURL != currentCustomIconURL {
+                    saveIcon(pendingIconURL, source: pendingIconSource)
+                } else {
+                    dismiss()
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
         }
         .frame(width: 620, height: supportsAppStoreSearch ? 540 : 320)
         .task {
@@ -1342,7 +1282,7 @@ struct IconEditorView: View {
                     Text("手动导入")
                         .fixedSize(horizontal: true, vertical: false)
 
-                    TextField("", text: $customURLInput, prompt: Text("https://example.com/icon.png"))
+                    TextField("", text: $customURLInput, prompt: Text("https://example.com/icon.png")).multilineTextAlignment(.leading)
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.leading)
                         .lineLimit(1)
@@ -1382,7 +1322,7 @@ struct IconEditorView: View {
             }
 
             HStack(alignment: .center, spacing: 12) {
-                    TextField("", text: $query, prompt: Text("输入 App 名称或关键字"))
+                    TextField("", text: $query, prompt: Text("输入 App 名称或关键字")).multilineTextAlignment(.leading)
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.leading)
                         .lineLimit(1)

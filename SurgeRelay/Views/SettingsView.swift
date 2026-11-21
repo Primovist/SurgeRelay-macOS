@@ -23,51 +23,6 @@ private struct SettingsWindowConfigurator: NSViewRepresentable {
     }
 }
 
-private struct SettingsNavigationButtons: View {
-    let canGoBack: Bool
-    let canGoForward: Bool
-    let goBack: () -> Void
-    let goForward: () -> Void
-
-    var body: some View {
-        HStack(spacing: 0) {
-            navigationButton(
-                systemImage: "chevron.left",
-                isEnabled: canGoBack,
-                action: goBack
-            )
-
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor).opacity(0.22))
-                .frame(width: 1, height: 17)
-
-            navigationButton(
-                systemImage: "chevron.right",
-                isEnabled: canGoForward,
-                action: goForward
-            )
-        }
-        .frame(width: 72, height: 32)
-        .glassEffect(.regular, in: Capsule())
-    }
-
-    private func navigationButton(
-        systemImage: String,
-        isEnabled: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 17, weight: .medium))
-                .frame(width: 35, height: 32)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(isEnabled ? Color.primary.opacity(0.72) : Color.secondary.opacity(0.28))
-        .disabled(!isEnabled)
-    }
-}
-
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var isCheckingUpdate = false
@@ -155,22 +110,13 @@ struct SettingsView: View {
             detailView(for: selectedPane)
                 .toolbar(removing: .title)
                 .toolbar {
-                    ToolbarItem(placement: .navigation) {
-                        HStack(spacing: 12) {
-                            SettingsNavigationButtons(
-                                canGoBack: !backStack.isEmpty,
-                                canGoForward: !forwardStack.isEmpty,
-                                goBack: goBack,
-                                goForward: goForward
-                            )
-
-                            Text(selectedPane.title)
-                                .font(.system(size: 15, weight: .semibold))
-                                .lineLimit(1)
-                                .fixedSize()
-                        }
-                    }
-                    .sharedBackgroundVisibility(.hidden)
+                    RelayNavigationToolbar(
+                        canGoBack: !backStack.isEmpty,
+                        canGoForward: !forwardStack.isEmpty,
+                        goBack: goBack,
+                        goForward: goForward,
+                        title: selectedPane.title
+                    )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -269,30 +215,38 @@ struct SettingsView: View {
     private var generalSettings: some View {
         Form {
             Section("配置目录") {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("App 数据目录")
-                    HStack(spacing: 10) {
-                        Text("~/Library/Application Support/Surge Relay")
+                HStack(alignment: .center, spacing: 12) {
+                    Image("SurgeDirectoryIcon")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 48, height: 48)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Surge 目录")
+                            .font(.headline)
+                        Text(model.settings.localModuleDirectory)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
-                            .lineLimit(1)
-                        Spacer()
-                        Button {
-                            model.openConfigurationDirectory()
-                        } label: {
-                            Image(systemName: "folder")
-                                .font(.system(size: 14, weight: .medium))
-                                .frame(width: 30, height: 30)
-                                .contentShape(Circle())
-                                .glassEffect(.regular.interactive(), in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .help("在 Finder 中显示")
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                        Text("Surge 使用的目录；通过 iCloud 同步的模块保存在这里。")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
-                    Text("设置、缓存与历史记录保存在本机；iCloud 的 Surge 文件夹只保留生成的模块。")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Button {
+                        NSWorkspace.shared.open(URL(filePath: model.settings.localModuleDirectory, directoryHint: .isDirectory))
+                    } label: {
+                        Image(systemName: "folder")
+                            .font(.system(size: 14, weight: .medium))
+                            .frame(width: 30, height: 30)
+                            .contentShape(Circle())
+                            .glassEffect(.regular.interactive(), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("在 Finder 中显示")
+                    .accessibilityLabel("在 Finder 中打开 Surge 目录")
                 }
             }
 
@@ -338,7 +292,8 @@ struct SettingsView: View {
     }
 
     private var webSettings: some View {
-        Form {
+        @Bindable var model = model
+        return Form {
             if model.deviceMode == .client {
                 Section {
                     Label(
@@ -358,10 +313,12 @@ struct SettingsView: View {
                             model.applyWebServerSettings()
                         }
                     ))
-                    TextField("端口", value: Binding(
-                        get: { model.settings.webServerPort },
-                        set: { model.settings.webServerPort = $0 }
-                    ), format: .number.grouping(.never))
+                    RelayInputRow(title: "端口", inputWidth: 84) {
+                        TextField("端口", value: Binding(
+                            get: { model.settings.webServerPort },
+                            set: { model.settings.webServerPort = $0 }
+                        ), format: .number.grouping(.never)).multilineTextAlignment(.leading)
+                    }
                     .onChange(of: model.settings.webServerPort) { _, _ in
                         if model.settings.webServerEnabled {
                             model.applyWebServerSettings()
@@ -379,6 +336,43 @@ struct SettingsView: View {
                         }
                     }
                 }
+                Section("自动化访问") {
+                    Toggle("允许本机 Agent 访问", isOn: Binding(
+                        get: { model.automationAccess.enabled },
+                        set: { enabled in
+                            model.automationAccess.enabled = enabled
+                            if enabled {
+                                model.automationAccess.ensureToken()
+                                model.settings.webServerEnabled = true
+                                model.applyWebServerSettings()
+                            }
+                            model.automationAccess.save()
+                            model.automationAPI.invalidatePlans()
+                        }
+                    ))
+                    if model.automationAccess.enabled {
+                        LabeledContent("API 地址") {
+                            Text("http://127.0.0.1:\(model.settings.webServerPort)/api/v1")
+                                .textSelection(.enabled)
+                        }
+                        Toggle("允许编辑", isOn: $model.automationAccess.allowEdits)
+                        Toggle("允许刷新", isOn: $model.automationAccess.allowRefresh)
+                        Toggle("允许发布", isOn: $model.automationAccess.allowPublish)
+                        HStack {
+                            Button("拷贝访问令牌", systemImage: "doc.on.doc") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(model.automationAccess.token, forType: .string)
+                            }
+                            Button("重置令牌", systemImage: "arrow.clockwise") {
+                                model.automationAccess.resetToken()
+                                model.automationAccess.save()
+                                model.automationAPI.invalidatePlans()
+                            }
+                            Link("接入说明", destination: URL(string: "https://github.com/EEliberto/SurgeRelay-macOS/blob/main/docs/Automation.md")!)
+                        }
+                    }
+                }
+                .onChange(of: model.automationAccess) { _, access in access.save() }
             }
         }
         .formStyle(.grouped)
@@ -411,7 +405,7 @@ struct SettingsView: View {
                 Section {
                     HStack(spacing: 12) {
                         Text("服务器地址")
-                        TextField("", text: $ponteServerAddressInput, prompt: Text("johnsmac.sgponte"))
+                        TextField("", text: $ponteServerAddressInput, prompt: Text("johnsmac.sgponte")).multilineTextAlignment(.leading)
                         .textFieldStyle(.roundedBorder)
                         .onChange(of: ponteServerAddressInput) { _, _ in
                             connectionResult = nil
@@ -470,6 +464,16 @@ struct SettingsView: View {
         )
     }
 
+    private var scriptHubUpdateTitle: String {
+        if isCheckingUpdate { return "正在检查更新…" }
+        if model.upstreamState.lastError != nil { return "无法检查 Script Hub 更新。" }
+        if model.upstreamState.revision == nil { return "尚未加载 Script Hub 引擎。" }
+        if model.upstreamState.sourceURL != model.settings.scriptHubModuleURL {
+            return "更新渠道已更改。"
+        }
+        return "Script Hub 引擎已是最新版本。"
+    }
+
     private var scriptHubSettings: some View {
         Form {
             Section("上游引擎") {
@@ -518,21 +522,76 @@ struct SettingsView: View {
                             }
                             await model.refreshScriptHub(showProgress: false)
                         }
+                        .disabled(isCheckingUpdate)
                     }
-                    .disabled(isCheckingUpdate)
-                    if isCheckingUpdate {
-                        ProgressView().controlSize(.small)
-                        Text("正在检查…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if let error = model.upstreamState.lastError {
-                    Label(error, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .textSelection(.enabled)
                 }
             }
+            if isCheckingUpdate {
+                Section {
+                    LabeledContent("已加载", value: model.upstreamState.sourceURL.map {
+                        "Script Hub · \(ScriptHubChannel.detect($0).title)"
+                    } ?? "尚未加载")
+                }
+            }
+
+
+            Section {
+                HStack {
+                    Text("自动更新")
+                    Spacer()
+                    Toggle("自动更新", isOn: Binding(
+                        get: { model.settings.automaticallyUpdateScriptHub },
+                        set: {
+                            model.settings.automaticallyUpdateScriptHub = $0
+                            if model.isClientMode {
+                                Task { await model.pushRemoteScriptHubSettings() }
+                            } else { model.saveSettings() }
+                        }
+                    ))
+                    .labelsHidden().toggleStyle(.switch)
+                }
+
+                HStack {
+                    Text("更新渠道")
+                    Spacer()
+                    Picker("更新渠道", selection: Binding(
+                        get: { ScriptHubChannel.detect(model.settings.scriptHubModuleURL) },
+                        set: { channel in
+                            guard channel != .custom else { return }
+                            model.settings.scriptHubModuleURL = channel.moduleURL
+                            isCheckingUpdate = true
+                            Task {
+                                defer { isCheckingUpdate = false }
+                                if model.isClientMode {
+                                    await model.pushRemoteScriptHubSettings()
+                                } else { model.saveSettings() }
+                                await model.refreshScriptHub(showProgress: false)
+                            }
+                        }
+                    )) {
+                        Text("稳定版").tag(ScriptHubChannel.stable)
+                        Text("测试版").tag(ScriptHubChannel.beta)
+                    }
+                    .labelsHidden().fixedSize().disabled(isCheckingUpdate)
+                }
+            }
+            Section {
+                if let error = model.upstreamState.lastError {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.callout).foregroundStyle(.orange).textSelection(.enabled)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.upstreamState.lastCheckedAt.map {
+                        "上次检查：" + $0.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened, locale: Locale(identifier: "zh_CN")))
+                    } ?? "尚未检查更新")
+                    if model.upstreamState.lastError != nil, model.upstreamState.revision != nil {
+                        Text("更新失败，继续使用已加载的引擎。")
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .listRowBackground(Color.clear)
         }
         .formStyle(.grouped)
         .onAppear {
@@ -602,7 +661,7 @@ struct SettingsView: View {
                         storageProviderSummary(
                             assetName: "iCloudIcon",
                             title: "通过 iCloud 保持 Surge Relay 同步",
-                            detail: "生成模块保存在 iCloud 云盘的 Surge 文件夹中；App 私有数据留在本机 Application Support。"
+                            detail: "生成模块保存在 iCloud 云盘的 Surge 文件夹中。"
                         )
 
                         if showsStableICloudStatus {
@@ -622,16 +681,35 @@ struct SettingsView: View {
                             detail: "Surge Relay 会验证仓库权限，并通过 Cloudflare 提供设备可访问的稳定订阅。"
                         )
 
-                        TextField("仓库地址", text: $githubRepositoryInput)
-                            .onChange(of: githubRepositoryInput) { _, _ in connectionResult = nil }
-                        SecureField("GitHub Token", text: Binding(
-                            get: { model.githubToken },
-                            set: { model.githubToken = $0 }
-                        ))
-                        .onChange(of: model.githubToken) { _, _ in connectionResult = nil }
-
-                        TextField("公共地址", text: $githubCloudflareInput)
-                            .onChange(of: githubCloudflareInput) { _, _ in connectionResult = nil }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("仓库地址")
+                            TextField("仓库地址", text: $githubRepositoryInput,
+                                      prompt: Text("https://github.com/owner/repository"))
+                                .labelsHidden()
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.leading)
+                                .onChange(of: githubRepositoryInput) { _, _ in connectionResult = nil }
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("GitHub Token")
+                            TextField("GitHub Token", text: Binding(
+                                get: { model.githubToken },
+                                set: { model.githubToken = $0 }
+                            ))
+                            .labelsHidden()
+                            .textFieldStyle(.roundedBorder)
+                            .multilineTextAlignment(.leading)
+                            .onChange(of: model.githubToken) { _, _ in connectionResult = nil }
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("公共地址")
+                            TextField("公共地址", text: $githubCloudflareInput,
+                                      prompt: Text("https://example.workers.dev"))
+                                .labelsHidden()
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.leading)
+                                .onChange(of: githubCloudflareInput) { _, _ in connectionResult = nil }
+                        }
                         Text("用于生成可在 Surge 中长期使用的稳定订阅地址。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -708,6 +786,16 @@ struct SettingsView: View {
 
     private var diagnosticsSettings: some View {
         Form {
+            if !model.publishLintIssues.isEmpty {
+                Section("最近发布检查") {
+                    ForEach(model.publishLintIssues) { issue in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(issue.severity.title) · \(issue.filePath):\(issue.line)").font(.headline)
+                            Text(issue.message).textSelection(.enabled)
+                        }.foregroundStyle(issue.severity == .error ? Color.red : Color.secondary)
+                    }
+                }
+            }
             Section {
                 if model.updateHistory.isEmpty {
                     ContentUnavailableView(

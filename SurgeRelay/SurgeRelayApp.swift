@@ -182,7 +182,7 @@ struct SurgeRelayApp: App {
         let updaterDelegate = SurgeRelayUpdaterDelegate()
         self.updaterDelegate = updaterDelegate
         updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: !PersistenceStore.isTesting,
             updaterDelegate: updaterDelegate,
             userDriverDelegate: nil
         )

@@ -51,6 +51,13 @@ targets:
     dependencies:
       - sdk: JavaScriptCore.framework
       - package: Sparkle
+      - target: SurgeRelayScriptWorker
+        embed: true
+        link: false
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.allenmiao.SurgeRelay
@@ -72,3 +79,14 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.allenmiao.SurgeRelayTests
         GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Surge Relay:
+    build:
+      targets:
+        Surge Relay: all
+    test:
+      environmentVariables:
+        SURGE_RELAY_TEST_MODE: "1"
+      targets:
+        - Surge RelayTests
